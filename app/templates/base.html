@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}DBA工具平台{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% if current_user.is_authenticated %}
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">&#9671;</span>
+        <span class="logo-text">DBA Platform</span>
+      </div>
+    </div>
+    <div class="sidebar-nav">
+      <a href="{{ url_for('main.dashboard') }}" class="nav-item {% if request.endpoint == 'main.dashboard' %}active{% endif %}">
+        <span class="nav-icon">&#9632;</span> 控制台
+      </a>
+      <a href="{{ url_for('awr.list_reports') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('awr.') %}active{% endif %}">
+        <span class="nav-icon">&#9670;</span> AWR分析
+      </a>
+      <a href="{{ url_for('knowledge.list_entries') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('knowledge.') %}active{% endif %}">
+        <span class="nav-icon">&#9733;</span> 知识库
+      </a>
+      <a href="{{ url_for('projects.list_projects') }}" class="nav-item {% if request.endpoint == 'projects.list_projects' %}active{% endif %}">
+        <span class="nav-icon">&#9783;</span> 项目
+      </a>
+      {% if current_user.is_admin %}
+      <div class="nav-divider"></div>
+      <a href="{{ url_for('admin.index') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('admin.') %}active{% endif %}">
+        <span class="nav-icon">&#9881;</span> 管理后台
+      </a>
+      {% endif %}
+    </div>
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <span class="user-badge {{ current_user.role }}">{{ current_user.role }}</span>
+        <span class="user-name">{{ current_user.username }}</span>
+      </div>
+      <a href="{{ url_for('auth.logout') }}" class="nav-item logout">退出</a>
+    </div>
+  </nav>
+  {% endif %}
+
+  <main class="{% if current_user.is_authenticated %}main-content{% else %}main-full{% endif %}">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-container">
+        {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

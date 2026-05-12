@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}DBA工具平台{% endblock %}
+{% block content %}
+<div class="landing-hero">
+  <div class="hero-badge">DBA &middot; DevOps &middot; Automation</div>
+  <h1 class="hero-title">数据库运维自动化工具平台</h1>
+  <p class="hero-desc">专业的Oracle AWR分析引擎，自学习知识库，覆盖MySQL/PostgreSQL/MongoDB/Redis全栈数据库运维</p>
+  <div style="margin-top:28px;display:flex;gap:12px;">
+    <a href="{{ url_for('auth.login') }}" class="btn btn-primary" style="padding:12px 28px;font-size:14px;">登录系统</a>
+    <a href="#projects" class="btn btn-secondary" style="padding:12px 28px;font-size:14px;">查看项目</a>
+  </div>
+</div>
+
+<div id="projects" style="padding:0 40px 20px;">
+  <h2 style="font-size:20px;font-weight:700;margin-bottom:20px;">开源项目</h2>
+</div>
+<div class="projects-grid">
+  {% for p in projects %}
+  <a href="{{ p.url }}" target="_blank" class="project-card" style="text-decoration:none;color:inherit;">
+    <div class="project-name">{{ p.name }}</div>
+    <div class="project-desc">{{ p.description or '暂无描述' }}</div>
+    <div class="project-meta">
+      {% if p.language %}
+      <span class="project-lang">
+        <span class="lang-dot lang-{{ p.language|lower }}"></span>
+        {{ p.language }}
+      </span>
+      {% endif %}
+      <span>{{ p.category or '' }}</span>
+    </div>
+  </a>
+  {% else %}
+  <div class="empty-state" style="grid-column:1/-1;">
+    <div class="empty-state-icon">&#9783;</div>
+    <div class="empty-state-text">暂无公开项目，请管理员同步GitHub数据</div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

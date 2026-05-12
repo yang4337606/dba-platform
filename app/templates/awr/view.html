@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}AWR报告 #{{ report.id }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ report.title }}</h1>
+    <div class="page-subtitle">
+      {{ report.db_name or '未知' }} / {{ report.instance_name or '未知' }}
+      &middot; 快照 #{{ report.snap_begin or '?' }} - #{{ report.snap_end or '?' }}
+    </div>
+  </div>
+  <div class="btn-group">
+    {% if current_user.can_analyze %}
+    <form method="POST" action="{{ url_for('awr.analyze_report', report_id=report.id) }}" style="display:inline-flex;gap:8px;align-items:center;">
+      <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" name="use_llm"> LLM增强
+      </label>
+      <button type="submit" class="btn btn-primary">执行分析</button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+  </div>
+</div>
+
+<!-- Report Info -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-value" style="font-size:16px;">{{ report.db_name or 'N/A' }}</div>
+    <div class="stat-label">数据库</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="font-size:16px;">{{ report.instance_name or 'N/A' }}</div>
+    <div class="stat-label">实例</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="font-size:16px;">{{ report.db_version or 'N/A' }}</div>
+    <div class="stat-label">版本</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="font-size:16px;">{{ report.host_name or 'N/A' }}</div>
+    <div class="stat-label">主机</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="font-size:16px;">{{ report.snap_duration or 'N/A' }}</div>
+    <div class="stat-label">采集时长</div>
+  </div>
+</div>
+
+<!-- Top Wait Events -->
+{% if parsed.get('top_events') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9670; Top 等待事件 ({{ parsed.top_events|length }})</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr>{% for key in parsed.top_events[0].keys() %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for evt in parsed.top_events[:15] %}
+      <tr>{% for val in evt.values() %}<td style="font-size:12px;">{{ val }}</td>{% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Load Profile -->
+{% if parsed.get('load_profile') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9632; 负载概况</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr>{% for key in parsed.load_profile[0].keys() %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for item in parsed.load_profile[:20] %}
+      <tr>{% for val in item.values() %}<td style="font-size:12px;">{{ val }}</td>{% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Analyses -->
+{% if analyses %}
+<div style="margin-top:24px;">
+  <h3 style="font-size:16px;font-weight:600;margin-bottom:12px;">分析记录</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>类型</th><th>评分</th><th>分析师</th><th>时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for a in analyses %}
+    <tr>
+      <td style="font-family:var(--font-mono);">#{{ a.id }}</td>
+      <td>
+        {% if a.analysis_type == 'llm' %}<span class="llm-badge">LLM</span>
+        {% else %}<span class="badge badge-info">自动</span>{% endif %}
+      </td>
+      <td>
+        <span class="{% if a.performance_score >= 80 %}score-good{% elif a.performance_score >= 60 %}score-warn{% else %}score-bad{% endif %}" style="font-family:var(--font-mono);font-weight:700;">
+          {{ a.performance_score }}
+        </span>
+      </td>
+      <td>{{ a.author.username if a.author else '-' }}</td>
+      <td style="font-size:12px;">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><a href="{{ url_for('awr.view_analysis', report_id=report.id, analysis_id=a.id) }}" class="btn btn-sm btn-primary">查看分析</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}项目{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">GitHub 项目</h1>
+    <div class="page-subtitle">数据库运维自动化工具集</div>
+  </div>
+  {% if current_user.is_authenticated and current_user.is_admin %}
+  <form method="POST" action="{{ url_for('projects.sync') }}" style="display:inline;">
+    <button type="submit" class="btn btn-primary">同步 GitHub</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if categories %}
+<div class="filter-bar">
+  <span class="filter-tag active">全部</span>
+  {% for cat in categories %}
+  <span class="filter-tag" onclick="filterProjects('{{ cat }}')">{{ cat }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="projects-grid" style="padding:0;">
+  {% for p in projects %}
+  <a href="{{ p.url }}" target="_blank" class="project-card" style="text-decoration:none;color:inherit;" data-category="{{ p.category }}">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div class="project-name" style="margin-bottom:0;">{{ p.name }}</div>
+      {% if p.is_private %}<span class="badge badge-muted">Private</span>{% endif %}
+    </div>
+    <div class="project-desc">{{ p.description or '暂无描述' }}</div>
+    <div class="project-meta">
+      {% if p.language %}
+      <span class="project-lang">
+        <span class="lang-dot lang-{{ p.language|lower }}"></span>
+        {{ p.language }}
+      </span>
+      {% endif %}
+      <span class="badge badge-info">{{ p.category or 'other' }}</span>
+    </div>
+  </a>
+  {% else %}
+  <div class="empty-state" style="grid-column:1/-1;">
+    <div class="empty-state-icon">&#9783;</div>
+    <div class="empty-state-text">暂无项目数据，请管理员同步GitHub</div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+function filterProjects(cat) {
+  document.querySelectorAll('.filter-tag').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.querySelectorAll('.project-card').forEach(c => {
+    c.style.display = (!cat || c.dataset.category === cat) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}AWR报告列表{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">AWR 报告</h1>
+    <div class="page-subtitle">Oracle AWR报告管理与分析</div>
+  </div>
+  <a href="{{ url_for('awr.upload') }}" class="btn btn-primary">上传报告</a>
+</div>
+
+<div class="card">
+  {% if reports.items %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr>
+      <th>ID</th><th>标题</th><th>数据库</th><th>实例</th>
+      <th>快照范围</th><th>状态</th><th>上传时间</th><th>操作</th>
+    </tr></thead>
+    <tbody>
+    {% for r in reports.items %}
+    <tr>
+      <td style="font-family:var(--font-mono);">#{{ r.id }}</td>
+      <td><a href="{{ url_for('awr.view_report', report_id=r.id) }}">{{ r.title }}</a></td>
+      <td style="font-family:var(--font-mono);font-size:12px;">{{ r.db_name or '-' }}</td>
+      <td style="font-family:var(--font-mono);font-size:12px;">{{ r.instance_name or '-' }}</td>
+      <td style="font-size:12px;">{{ r.snap_begin or '?' }} - {{ r.snap_end or '?' }}</td>
+      <td>
+        {% if r.status == 'analyzed' %}<span class="badge badge-success">已分析</span>
+        {% elif r.status == 'parsed' %}<span class="badge badge-info">已解析</span>
+        {% elif r.status == 'error' %}<span class="badge badge-danger">错误</span>
+        {% else %}<span class="badge badge-muted">{{ r.status }}</span>{% endif %}
+      </td>
+      <td style="font-size:12px;color:var(--text-muted);">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>
+        <div class="btn-group">
+          <a href="{{ url_for('awr.view_report', report_id=r.id) }}" class="btn btn-sm btn-secondary">查看</a>
+          {% if current_user.is_admin %}
+          <form method="POST" action="{{ url_for('awr.delete_report', report_id=r.id) }}" style="display:inline;">
+            <button type="submit" class="btn btn-sm btn-danger" data-confirm="确认删除此报告？">删除</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if reports.pages > 1 %}
+  <div class="pagination">
+    {% if reports.has_prev %}<a href="?page={{ reports.prev_num }}">&laquo;</a>{% endif %}
+    {% for p in reports.iter_pages() %}
+      {% if p %}<a href="?page={{ p }}" class="{% if p == reports.page %}active{% endif %}">{{ p }}</a>
+      {% else %}<span>...</span>{% endif %}
+    {% endfor %}
+    {% if reports.has_next %}<a href="?page={{ reports.next_num }}">&raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-state-icon">&#9670;</div>
+    <div class="empty-state-text">暂无AWR报告</div>
+    <a href="{{ url_for('awr.upload') }}" class="btn btn-primary" style="margin-top:16px;">上传第一份报告</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

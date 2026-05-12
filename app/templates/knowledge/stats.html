@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}知识库统计{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">知识库统计</h1>
+    <div class="page-subtitle">自学习效果与知识覆盖</div>
+  </div>
+  <a href="{{ url_for('knowledge.list_entries') }}" class="btn btn-secondary">返回知识库</a>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{ total }}</div>
+    <div class="stat-label">总条目数</div>
+  </div>
+  {% for cat, cnt in by_source %}
+  <div class="stat-card {% if cat == 'learned' %}success{% elif cat == 'manual' %}warning{% endif %}">
+    <div class="stat-value">{{ cnt }}</div>
+    <div class="stat-label">{{ cat }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+  <div class="card">
+    <div class="card-header">按分类分布</div>
+    {% for cat, cnt in by_category %}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span class="badge badge-info">{{ cat }}</span>
+      <span style="font-family:var(--font-mono);font-weight:600;">{{ cnt }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div class="card-header">高频匹配 Top 10</div>
+    {% for entry in top_matched %}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <div>
+        <div style="font-size:13px;font-weight:500;">{{ entry.title }}</div>
+        <div style="font-size:11px;color:var(--text-muted);">{{ entry.category }} &middot; {{ entry.source }}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-family:var(--font-mono);font-weight:700;">{{ entry.match_count }}</div>
+        <div style="font-size:10px;color:var(--text-muted);">匹配</div>
+      </div>
+    </div>
+    {% endfor %}
+    {% if not top_matched %}
+    <div class="empty-state"><div class="empty-state-text">暂无匹配记录</div></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

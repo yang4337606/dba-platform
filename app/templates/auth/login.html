@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}登录 - DBA工具平台{% endblock %}
+{% block content %}
+<div class="login-container">
+  <div class="login-box">
+    <div class="login-title">DBA Platform</div>
+    <div class="login-subtitle">Oracle AWR 分析 &middot; 知识库 &middot; 自动化运维</div>
+    <form method="POST">
+      <div class="form-group">
+        <label class="form-label">用户名</label>
+        <input type="text" name="username" class="form-input" required autofocus>
+      </div>
+      <div class="form-group">
+        <label class="form-label">密码</label>
+        <input type="password" name="password" class="form-input" required>
+      </div>
+      <div class="form-group form-checkbox">
+        <input type="checkbox" name="remember" id="remember">
+        <label for="remember" style="font-size:12px;color:var(--text-secondary)">记住登录</label>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:12px;">登录</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}审计日志{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">审计日志</h1>
+    <div class="page-subtitle">系统操作记录</div>
+  </div>
+  <a href="{{ url_for('admin.index') }}" class="btn btn-secondary">返回管理</a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>详情</th><th>IP地址</th></tr></thead>
+    <tbody>
+    {% for log in logs.items %}
+    <tr>
+      <td style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ log.user.username if log.user else '-' }}</td>
+      <td><span class="badge badge-info">{{ log.action }}</span></td>
+      <td style="font-size:12px;">{{ log.detail or '-' }}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;">{{ log.ip_address or '-' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if logs.pages > 1 %}
+  <div class="pagination">
+    {% if logs.has_prev %}<a href="?page={{ logs.prev_num }}">&laquo;</a>{% endif %}
+    {% for p in logs.iter_pages() %}
+      {% if p %}<a href="?page={{ p }}" class="{% if p == logs.page %}active{% endif %}">{{ p }}</a>
+      {% else %}<span>...</span>{% endif %}
+    {% endfor %}
+    {% if logs.has_next %}<a href="?page={{ logs.next_num }}">&raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

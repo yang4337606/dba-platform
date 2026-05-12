@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}分析报告 #{{ analysis.id }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">分析报告 #{{ analysis.id }}</h1>
+    <div class="page-subtitle">
+      {{ report.title }} &middot; {{ report.db_name or '' }}
+      {% if analysis.analysis_type == 'llm' %}<span class="llm-badge" style="margin-left:8px;">LLM增强</span>{% endif %}
+    </div>
+  </div>
+  <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">返回报告</a>
+</div>
+
+<!-- Performance Score -->
+<div style="display:flex;align-items:center;gap:24px;margin-bottom:24px;">
+  <div class="score-ring {% if analysis.performance_score >= 80 %}score-good{% elif analysis.performance_score >= 60 %}score-warn{% else %}score-bad{% endif %}">
+    {{ analysis.performance_score }}
+  </div>
+  <div>
+    <div style="font-size:18px;font-weight:700;">性能评分</div>
+    <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">
+      {% if analysis.performance_score >= 80 %}数据库运行状态良好
+      {% elif analysis.performance_score >= 60 %}存在一些需要关注的性能问题
+      {% else %}存在严重的性能瓶颈，需要立即处理{% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Summary -->
+{% if summary %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9632; 概览</div>
+  <div class="analysis-body">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+      <div><span style="color:var(--text-muted);font-size:12px;">数据库</span><div>{{ summary.get('database', 'N/A') }}</div></div>
+      <div><span style="color:var(--text-muted);font-size:12px;">版本</span><div>{{ summary.get('version', 'N/A') }}</div></div>
+      <div><span style="color:var(--text-muted);font-size:12px;">主机</span><div>{{ summary.get('host', 'N/A') }}</div></div>
+      <div><span style="color:var(--text-muted);font-size:12px;">快照范围</span><div>{{ summary.get('snap_range', 'N/A') }}</div></div>
+      <div><span style="color:var(--text-muted);font-size:12px;">时长</span><div>{{ summary.get('duration', 'N/A') }}</div></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Wait Events Analysis -->
+{% if wait_events %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9670; 等待事件分析 ({{ wait_events|length }})</div>
+  <div class="analysis-body">
+    {% for item in wait_events %}
+    <div class="finding-item">
+      <div class="finding-title" style="font-family:var(--font-mono);font-size:12px;">
+        {% for k, v in item.event.items() %}{{ v }} {% endfor %}
+      </div>
+      {% for match in item.matches %}
+      <div style="margin-top:8px;">
+        <span class="badge badge-{{ match.severity }}">{{ match.severity }}</span>
+        <span style="font-weight:600;margin-left:4px;">{{ match.title }}</span>
+        {% if match.source != 'builtin' %}<span class="badge badge-info" style="margin-left:4px;">{{ match.source }}</span>{% endif %}
+      </div>
+      <div class="finding-desc">{{ match.description }}</div>
+      {% if match.solution %}
+      <div class="finding-solution">{{ match.solution }}</div>
+      {% endif %}
+      {% endfor %}
+      {% if not item.matches %}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">暂无匹配的知识库条目</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- SQL Analysis -->
+{% if sql_data %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9733; SQL 分析 ({{ sql_data|length }})</div>
+  <div class="analysis-body">
+    {% for item in sql_data[:10] %}
+    <div class="finding-item">
+      <div style="font-size:11px;color:var(--accent);font-family:var(--font-mono);margin-bottom:4px;">{{ item.category }}</div>
+      <div class="table-wrap">
+      <table style="font-size:11px;">
+        {% for k, v in item.sql_info.items() %}
+        <tr><td style="width:180px;color:var(--text-muted);padding:4px 8px;">{{ k }}</td><td style="padding:4px 8px;">{{ v }}</td></tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Recommendations -->
+{% if recommendations %}
+<div class="analysis-section">
+  <div class="analysis-header" style="color:var(--warning);">&#9888; 优化建议 ({{ recommendations|length }})</div>
+  <div class="analysis-body">
+    {% for rec in recommendations %}
+    <div class="finding-item">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge badge-{{ rec.severity }}">{{ rec.severity }}</span>
+        <span class="finding-title">{{ rec.title }}</span>
+        {% if rec.source != 'builtin' %}<span class="badge badge-info">{{ rec.source }}</span>{% endif %}
+      </div>
+      {% if rec.solution %}
+      <div class="finding-solution">{{ rec.solution }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- LLM Analysis -->
+{% if analysis.llm_analysis %}
+<div class="analysis-section" style="border-color:rgba(168,85,247,0.3);">
+  <div class="analysis-header">
+    <span class="llm-badge" style="margin-right:8px;">AI</span> LLM 增强分析
+    {% if analysis.llm_provider %}<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">{{ analysis.llm_provider }}</span>{% endif %}
+  </div>
+  <div class="analysis-body" style="white-space:pre-line;line-height:1.8;font-size:13px;">{{ analysis.llm_analysis }}</div>
+</div>
+{% endif %}
+{% endblock %}
