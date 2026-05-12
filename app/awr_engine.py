@@ -13,6 +13,9 @@ from bs4 import BeautifulSoup
 # ---------------------------------------------------------------------------
 
 BUILTIN_RULES = [
+    # =========================================================================
+    # A. WAIT EVENT RULES (等待事件)
+    # =========================================================================
     {
         'name': 'db file sequential read 高等待',
         'category': 'wait_event',
@@ -38,12 +41,36 @@ BUILTIN_RULES = [
         'severity': 'high',
     },
     {
+        'name': 'log file parallel write 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "log file parallel write"}],
+        'root_cause': 'LGWR进程写redo log的I/O延迟过高，底层存储写性能不足',
+        'solution': '1. 检查redo log所在存储的写IOPS和延迟\n2. 将redo log迁移到低延迟SSD/NVMe存储\n3. 确认redo log不与数据文件共享I/O通道\n4. 检查ASM冗余策略(NORMAL vs HIGH)对写放大的影响',
+        'severity': 'high',
+    },
+    {
         'name': 'TX row lock contention',
         'category': 'wait_event',
         'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "enq: TX - row lock contention"}],
         'root_cause': '行锁争用严重，多个会话竞争同一行数据',
         'solution': '1. 定位持锁SQL和阻塞会话\n2. 优化事务粒度，减少长事务\n3. 检查应用逻辑是否存在热点行更新\n4. 考虑使用乐观锁机制',
         'severity': 'high',
+    },
+    {
+        'name': 'TX index contention',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "enq: TX - index contention"}],
+        'root_cause': '索引叶子块争用，通常出现在单调递增主键的右侧插入场景',
+        'solution': '1. 将序列缓存增大(CACHE 1000+)\n2. 考虑使用反转索引(Reverse Key Index)\n3. 使用Hash分区索引分散插入点\n4. 对于RAC环境考虑实例级序列CACHE',
+        'severity': 'high',
+    },
+    {
+        'name': 'TX allocate ITL entry',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "enq: TX - allocate ITL entry"}],
+        'root_cause': 'ITL(Interested Transaction List)槽位不足，块内并发事务过多',
+        'solution': '1. 增大表/索引的INITRANS参数(建议10-20)\n2. 重建受影响的表和索引\n3. 检查是否有极小块中大量并发DML\n4. ALTER TABLE xxx INITRANS 16;',
+        'severity': 'medium',
     },
     {
         'name': 'latch/mutex 争用',
@@ -54,6 +81,178 @@ BUILTIN_RULES = [
         'severity': 'high',
     },
     {
+        'name': 'cursor: pin S wait on X',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "cursor: pin S wait on X"}],
+        'root_cause': '大量会话同时解析同一SQL语句导致的互斥等待，经典的高并发硬解析症状',
+        'solution': '1. 检查V$SQL中VERSION_COUNT过高的游标\n2. 推动应用端使用绑定变量\n3. 检查ACS(Adaptive Cursor Sharing)是否导致游标版本过多\n4. 设置_cursor_obsolete_threshold限制版本数',
+        'severity': 'high',
+    },
+    {
+        'name': 'cursor: mutex S',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "cursor: mutex S"}],
+        'root_cause': 'Cursor Mutex争用，通常与高频SQL执行和Library Cache并发访问有关',
+        'solution': '1. 检查是否有高频执行且不使用绑定变量的SQL\n2. 检查V$SQL中EXECUTIONS极高的语句\n3. 确认是否存在library cache内存不足\n4. 检查补丁 - 多个Bug可导致此等待异常升高',
+        'severity': 'medium',
+    },
+    {
+        'name': 'library cache lock/pin',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "library cache"}],
+        'root_cause': 'Library Cache对象锁等待，通常与DDL操作、包编译或对象失效有关',
+        'solution': '1. 检查是否有DDL操作(ALTER/GRANT)锁住库缓存对象\n2. 检查是否有PL/SQL包正在编译\n3. 确认是否有对象失效导致的级联重编译\n4. 避免在业务高峰执行DDL',
+        'severity': 'medium',
+    },
+    {
+        'name': 'direct path read 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 15, "event": "direct path read"}],
+        'root_cause': '直接路径读(绕过Buffer Cache)过高，通常与大表全扫或并行查询有关',
+        'solution': '1. 11g+大表自动走direct path read，检查_serial_direct_read参数\n2. 检查是否有不必要的大表全扫描\n3. 确认并行度设置是否合理\n4. 对于LOB列检查是否可优化为SECUREFILE',
+        'severity': 'medium',
+    },
+    {
+        'name': 'direct path write 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "direct path write"}],
+        'root_cause': '直接路径写等待过高，与CTAS、INSERT APPEND、排序溢出到磁盘有关',
+        'solution': '1. 检查是否有大量CTAS/INSERT /*+ APPEND */操作\n2. 增大PGA_AGGREGATE_TARGET减少排序溢出\n3. 检查临时表空间I/O性能\n4. 如为批量加载，确认走的是direct path load',
+        'severity': 'medium',
+    },
+    {
+        'name': 'direct path read temp 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "direct path read temp"}],
+        'root_cause': '临时表空间读取过多，SQL排序/哈希操作溢出到磁盘',
+        'solution': '1. 增大PGA_AGGREGATE_TARGET，减少磁盘排序\n2. 优化Top SQL减少排序/哈希连接数据量\n3. 将临时表空间放到高速存储\n4. 检查WORKAREA_SIZE_POLICY是否为AUTO',
+        'severity': 'medium',
+    },
+    {
+        'name': 'direct path write temp 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "direct path write temp"}],
+        'root_cause': '临时表空间写入过多，排序/哈希/全局临时表溢出到磁盘',
+        'solution': '1. 增大PGA_AGGREGATE_TARGET\n2. 检查V$SQL_WORKAREA中ONE_PASS/MULTI_PASS次数\n3. 优化SQL减少排序集大小\n4. 确认临时表空间自动扩展配置',
+        'severity': 'medium',
+    },
+    {
+        'name': 'read by other session',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 8, "event": "read by other session"}],
+        'root_cause': '多个会话并发请求读取相同数据块，需等待第一个会话完成物理读',
+        'solution': '1. 检查热点段和热点块(V$BH中TCH值)\n2. 优化SQL减少对同一块的并发访问\n3. 如果是索引根块/分支块热点，考虑Hash分区索引\n4. 增大Buffer Cache减少物理读概率',
+        'severity': 'medium',
+    },
+    {
+        'name': 'buffer busy waits 高等待',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 8, "event": "buffer busy waits"}],
+        'root_cause': '缓冲区忙等待，多个进程同时修改同一数据块',
+        'solution': '1. 确定等待的块类型(数据块/段头/undo头)\n2. 数据块争用: 增大表PCTFREE或使用ASSM\n3. 段头争用: 增大FREELISTS\n4. Undo头争用: 增大UNDO表空间或调整undo_retention',
+        'severity': 'high',
+    },
+    {
+        'name': 'free buffer waits',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "free buffer waits"}],
+        'root_cause': '没有空闲缓冲区可用，DBWR写脏块速度跟不上',
+        'solution': '1. 增大DB_CACHE_SIZE\n2. 检查DBWR I/O性能(是否存储瓶颈)\n3. 增加DB_WRITER_PROCESSES数量\n4. 启用异步I/O(FILESYSTEMIO_OPTIONS=SETALL)',
+        'severity': 'high',
+    },
+    {
+        'name': 'enq: HW - contention',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "enq: HW - contention"}],
+        'root_cause': '高水位线(HWM)争用，大量并发INSERT扩展段时竞争',
+        'solution': '1. 使用ASSM(自动段空间管理)表空间\n2. 对高并发INSERT表预分配空间(ALTER TABLE ALLOCATE EXTENT)\n3. 使用本地管理表空间(LMT)而非字典管理\n4. 考虑分区表分散插入',
+        'severity': 'medium',
+    },
+    {
+        'name': 'enq: ST - contention',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 3, "event": "enq: ST - contention"}],
+        'root_cause': '空间管理(Space Transaction)争用，字典管理表空间的空间分配冲突',
+        'solution': '1. 将字典管理表空间转换为本地管理表空间\n2. 检查是否有频繁的表空间扩展操作\n3. 增大数据文件的AUTOEXTEND增量\n4. 预分配足够的空间减少动态扩展',
+        'severity': 'medium',
+    },
+    {
+        'name': 'enq: TM - contention',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "enq: TM - contention"}],
+        'root_cause': 'DML表锁争用，通常因为外键无索引或并发DDL/DML冲突',
+        'solution': '1. 检查外键列是否都已建索引(最常见原因)\n2. 确认是否有并发DDL锁住了表\n3. 检查是否有LOCK TABLE显式锁定\n4. 对子表外键列添加索引消除全表锁升级',
+        'severity': 'high',
+    },
+    {
+        'name': 'latch: shared pool',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "latch: shared pool"}],
+        'root_cause': 'Shared Pool Latch争用，与大量硬解析或shared pool碎片化有关',
+        'solution': '1. 使用绑定变量减少硬解析\n2. 增大SHARED_POOL_SIZE\n3. 设置SHARED_POOL_RESERVED_SIZE为shared pool的5-10%\n4. 检查V$SHARED_POOL_RESERVED中的REQUEST_FAILURES',
+        'severity': 'high',
+    },
+    {
+        'name': 'latch: cache buffers chains',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "latch: cache buffers chains"}],
+        'root_cause': 'Buffer Cache哈希链Latch争用，存在热点数据块被高频访问',
+        'solution': '1. 识别热点块(V$LATCH_CHILDREN.GETS最高的地址)\n2. 检查是否有小表被高频全扫描 - 考虑CACHE提示\n3. 分散热点数据到更多块(增大PCTFREE或分区)\n4. 对于索引根块热点，考虑Hash分区索引',
+        'severity': 'high',
+    },
+    {
+        'name': 'log buffer space',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 3, "event": "log buffer space"}],
+        'root_cause': 'Log Buffer空间不足，redo生成速度超过LGWR写入速度',
+        'solution': '1. 增大LOG_BUFFER参数(通常16-64MB)\n2. 检查redo log文件I/O性能\n3. 确认LGWR没有被其他I/O操作阻塞\n4. 检查是否有大事务产生巨量redo',
+        'severity': 'medium',
+    },
+    {
+        'name': 'log file switch (checkpoint/archiving)',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 3, "event": "log file switch"}],
+        'root_cause': '日志切换等待，因checkpoint未完成或归档进程跟不上',
+        'solution': '1. 增大redo log文件大小(建议1-4GB)\n2. 增加redo log组数(建议每组3-4个)\n3. 检查归档目的地空间和I/O性能\n4. 调整LOG_CHECKPOINT_INTERVAL/LOG_CHECKPOINT_TIMEOUT',
+        'severity': 'high',
+    },
+    {
+        'name': 'Scheduler 等待过高',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "resmgr:cpu quantum"}],
+        'root_cause': 'Resource Manager限制了CPU使用，会话被降级排队',
+        'solution': '1. 检查当前Resource Manager Plan设置\n2. 确认消费者组CPU限制是否过严\n3. 调整计划中的CPU分配比例\n4. 在非必要时禁用Resource Manager: ALTER SYSTEM SET RESOURCE_MANAGER_PLAN=\'\';',
+        'severity': 'medium',
+    },
+    {
+        'name': 'SQL*Net 网络等待过高',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "SQL*Net"}],
+        'root_cause': '应用层与数据库之间的网络延迟过高或数据传输量大',
+        'solution': '1. 检查应用端是否逐行FETCH(改用批量FETCH)\n2. 调整SDU/TDU参数增大网络包大小\n3. 确认网络带宽和延迟是否正常\n4. 使用数组绑定批量操作减少往返次数',
+        'severity': 'medium',
+    },
+    {
+        'name': 'control file sequential/parallel read',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "control file"}],
+        'root_cause': '控制文件读取等待过高，与频繁的控制文件访问或慢存储有关',
+        'solution': '1. 将控制文件放到高速存储\n2. 减少控制文件副本到2-3个(不放慢盘)\n3. 检查是否有频繁的日志切换触发控制文件更新\n4. 确认控制文件未放在NFS等高延迟存储上',
+        'severity': 'medium',
+    },
+    {
+        'name': 'os thread startup',
+        'category': 'wait_event',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "os thread startup"}],
+        'root_cause': '并行查询启动线程等待过高，PX进程创建开销大',
+        'solution': '1. 设置PARALLEL_MIN_SERVERS预启动并行进程\n2. 减少不必要的并行查询\n3. 检查OS线程创建是否有资源限制(ulimit)\n4. 设置合理的PARALLEL_MAX_SERVERS',
+        'severity': 'medium',
+    },
+
+    # =========================================================================
+    # B. CPU RULES (CPU相关)
+    # =========================================================================
+    {
         'name': 'CPU 使用率过高',
         'category': 'cpu',
         'conditions': [{"metric": "db_time_ratio", "op": ">", "value": 1.5}, {"metric": "cpu_pct_db_time", "op": ">", "value": 60}],
@@ -62,7 +261,27 @@ BUILTIN_RULES = [
         'severity': 'high',
     },
     {
-        'name': 'SQL 执行效率低',
+        'name': 'DB CPU 占 DB Time 超过80%',
+        'category': 'cpu',
+        'conditions': [{"metric": "cpu_pct_db_time", "op": ">", "value": 80}],
+        'root_cause': 'CPU密集型负载，几乎所有DB Time都消耗在CPU上',
+        'solution': '1. 重点优化Top SQL by CPU Time中的语句\n2. 检查是否有PL/SQL中的大循环或递归调用\n3. 使用SQL Profile/SPM固定好的执行计划\n4. 评估是否有不必要的函数调用在SQL中',
+        'severity': 'high',
+    },
+    {
+        'name': 'AAS/CPU 比率过高',
+        'category': 'cpu',
+        'conditions': [{"metric": "aas_per_cpu", "op": ">", "value": 0.7}],
+        'root_cause': 'Average Active Sessions接近或超过CPU核数，系统过载',
+        'solution': '1. 减少并发活跃会话数(检查连接池配置)\n2. 优化高频SQL减少单次执行CPU消耗\n3. 考虑增加CPU资源(横向/纵向扩展)\n4. 使用Resource Manager限制低优先级消费者',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # C. SQL EFFICIENCY RULES (SQL效率)
+    # =========================================================================
+    {
+        'name': 'SQL 执行效率低 - 高逻辑读',
         'category': 'sql_efficiency',
         'conditions': [{"metric": "buffer_gets_per_exec", "op": ">", "value": 100000}],
         'root_cause': '存在高Buffer Gets的SQL，执行计划可能不优',
@@ -70,44 +289,48 @@ BUILTIN_RULES = [
         'severity': 'medium',
     },
     {
+        'name': 'SQL 执行效率低 - 高物理读',
+        'category': 'sql_efficiency',
+        'conditions': [{"metric": "disk_reads_per_exec", "op": ">", "value": 1000}],
+        'root_cause': '存在高物理读SQL，数据不在缓存中或访问量巨大',
+        'solution': '1. 检查SQL是否全表扫描大表\n2. 增大Buffer Cache缓存更多数据\n3. 创建索引减少物理读取\n4. 考虑分区裁剪减少扫描范围',
+        'severity': 'medium',
+    },
+    {
+        'name': 'SQL 执行次数过高',
+        'category': 'sql_efficiency',
+        'conditions': [{"metric": "sql_executions_per_sec", "op": ">", "value": 10000}],
+        'root_cause': '存在高频执行的SQL，即使单次开销小，累积影响也很大',
+        'solution': '1. 检查是否有不必要的循环内SQL调用\n2. 评估是否可以批量操作替代逐行处理\n3. 使用应用层缓存减少数据库往返\n4. 检查是否有不必要的健康检查/心跳SQL',
+        'severity': 'medium',
+    },
+    {
+        'name': 'SQL 解析占比过高(Parse vs Execute)',
+        'category': 'sql_efficiency',
+        'conditions': [{"metric": "execute_to_parse_pct", "op": "<", "value": 50}],
+        'root_cause': 'Execute to Parse%过低，说明SQL没有被复用，每次执行都要解析',
+        'solution': '1. 应用端使用Statement Cache / Session Cursor Cache\n2. 增大SESSION_CACHED_CURSORS参数(建议100+)\n3. 设置OPEN_CURSORS足够大\n4. 确保应用连接池正确复用PreparedStatement',
+        'severity': 'medium',
+    },
+    {
+        'name': 'Top SQL 占 DB Time 过于集中',
+        'category': 'sql_efficiency',
+        'conditions': [{"metric": "top1_sql_pct_db_time", "op": ">", "value": 30}],
+        'root_cause': '单条SQL消耗了超过30% DB Time，为关键性能瓶颈点',
+        'solution': '1. 最高优先级优化此SQL\n2. 检查执行计划是否发生变化(计划翻转)\n3. 使用SQL Plan Baseline锁定好的计划\n4. 检查统计信息和直方图是否准确',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # D. MEMORY RULES (内存相关)
+    # =========================================================================
+    {
         'name': 'Buffer Cache 命中率低',
         'category': 'memory',
         'conditions': [{"metric": "buffer_cache_hit_ratio", "op": "<", "value": 95}],
         'root_cause': 'Buffer Cache命中率不足，大量物理读取',
         'solution': '1. 考虑增大db_cache_size\n2. 检查是否有大量全表扫描\n3. 使用KEEP/RECYCLE缓冲池隔离热点对象\n4. 检查是否有不合理的direct path read',
         'severity': 'medium',
-    },
-    {
-        'name': 'I/O 延迟过高',
-        'category': 'io',
-        'conditions': [{"metric": "avg_read_time", "op": ">", "value": 10}],
-        'root_cause': '磁盘I/O响应时间过长',
-        'solution': '1. 检查存储阵列性能和队列深度\n2. 确认是否存在I/O热点文件\n3. 考虑将数据文件分散到多个磁盘组\n4. 评估SSD存储升级方案',
-        'severity': 'high',
-    },
-    {
-        'name': 'DB Time 远超 CPU Time',
-        'category': 'load',
-        'conditions': [{"metric": "db_time_ratio", "op": ">", "value": 3.0}],
-        'root_cause': 'DB Time是CPU Time的3倍以上，大量时间花在等待',
-        'solution': '1. 分析Top Wait Events定位等待瓶颈\n2. 检查I/O等待和锁等待\n3. 分析AAS(Average Active Sessions)趋势\n4. 确认是否存在资源瓶颈',
-        'severity': 'high',
-    },
-    {
-        'name': '硬解析比例过高',
-        'category': 'parse',
-        'conditions': [{"metric": "hard_parse_pct", "op": ">", "value": 10}],
-        'root_cause': '硬解析占比过高，消耗大量CPU和shared pool资源',
-        'solution': '1. 推动应用使用绑定变量\n2. 设置cursor_sharing=FORCE(临时方案)\n3. 增大shared_pool_size\n4. 检查是否有动态SQL拼接导致的硬解析',
-        'severity': 'medium',
-    },
-    {
-        'name': 'GC 等待(RAC)',
-        'category': 'rac',
-        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "gc cr block receive time"}],
-        'root_cause': 'RAC节点间Global Cache传输延迟过高',
-        'solution': '1. 检查RAC互联网络带宽和延迟\n2. 识别热点对象并做实例隔离\n3. 使用服务(Service)将相关SQL路由到同一节点\n4. 检查是否有跨节点锁争用',
-        'severity': 'high',
     },
     {
         'name': 'Library Cache 命中率低',
@@ -118,6 +341,194 @@ BUILTIN_RULES = [
         'severity': 'medium',
     },
     {
+        'name': 'Shared Pool 空闲不足',
+        'category': 'memory',
+        'conditions': [{"metric": "shared_pool_free_pct", "op": "<", "value": 10}],
+        'root_cause': 'Shared Pool可用空间不足，可能导致ORA-4031错误和硬解析失败',
+        'solution': '1. 增大SHARED_POOL_SIZE\n2. 设置SHARED_POOL_RESERVED_SIZE=shared_pool的5-10%\n3. 检查V$SGASTAT中free memory和V$SHARED_POOL_RESERVED\n4. 使用绑定变量减少游标数量占用',
+        'severity': 'high',
+    },
+    {
+        'name': 'PGA 使用过高/溢出频繁',
+        'category': 'memory',
+        'conditions': [{"metric": "pga_over_allocation_count", "op": ">", "value": 0}],
+        'root_cause': 'PGA过度分配，排序和Hash Join频繁溢出到磁盘(multi-pass)',
+        'solution': '1. 增大PGA_AGGREGATE_TARGET\n2. 检查V$SQL_WORKAREA中OPTIMAL/ONE_PASS/MULTI_PASS分布\n3. 优化SQL减少排序和Hash Join数据量\n4. 检查是否有异常的PGA消耗者(V$PROCESS.PGA_USED_MEM)',
+        'severity': 'medium',
+    },
+    {
+        'name': 'In-memory Sort% 过低',
+        'category': 'memory',
+        'conditions': [{"metric": "in_memory_sort_pct", "op": "<", "value": 95}],
+        'root_cause': '内存排序比例过低，大量排序溢出到磁盘(临时表空间)',
+        'solution': '1. 增大PGA_AGGREGATE_TARGET\n2. 优化排序SQL减少排序集大小\n3. 使用索引避免排序(ORDER BY走索引)\n4. 检查是否有不必要的DISTINCT/GROUP BY/ORDER BY',
+        'severity': 'medium',
+    },
+    {
+        'name': 'Soft Parse% 过低',
+        'category': 'memory',
+        'conditions': [{"metric": "soft_parse_pct", "op": "<", "value": 90}],
+        'root_cause': '软解析比例过低，硬解析比例过高，Shared Pool压力大',
+        'solution': '1. 推动应用使用绑定变量(最根本解决方案)\n2. 设置cursor_sharing=FORCE(紧急缓解)\n3. 增大SHARED_POOL_SIZE\n4. 增大SESSION_CACHED_CURSORS',
+        'severity': 'high',
+    },
+    {
+        'name': 'Latch Hit% 过低',
+        'category': 'memory',
+        'conditions': [{"metric": "latch_hit_pct", "op": "<", "value": 99}],
+        'root_cause': 'Latch命中率低于99%，存在严重的Latch争用',
+        'solution': '1. 检查V$LATCH中MISSES/GETS最高的Latch名称\n2. shared pool latch: 绑定变量+增大shared pool\n3. cache buffers chains: 消除热点块\n4. redo allocation: 增大LOG_BUFFER或使用Private Redo Strands',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # E. I/O RULES (存储I/O)
+    # =========================================================================
+    {
+        'name': 'I/O 延迟过高',
+        'category': 'io',
+        'conditions': [{"metric": "avg_read_time", "op": ">", "value": 10}],
+        'root_cause': '磁盘I/O响应时间过长',
+        'solution': '1. 检查存储阵列性能和队列深度\n2. 确认是否存在I/O热点文件\n3. 考虑将数据文件分散到多个磁盘组\n4. 评估SSD存储升级方案',
+        'severity': 'high',
+    },
+    {
+        'name': 'I/O 写延迟过高',
+        'category': 'io',
+        'conditions': [{"metric": "avg_write_time", "op": ">", "value": 5}],
+        'root_cause': '磁盘写I/O响应时间过长，影响DBWR和LGWR性能',
+        'solution': '1. 检查存储写缓存是否正常工作(BBU电池)\n2. 确认RAID级别写惩罚(RAID5/6写放大)\n3. 将redo log和数据文件分开到不同存储\n4. 检查是否有I/O调度器瓶颈(Linux: deadline/noop)',
+        'severity': 'high',
+    },
+    {
+        'name': '单个表空间I/O过于集中',
+        'category': 'io',
+        'conditions': [{"metric": "tablespace_io_pct", "op": ">", "value": 60}],
+        'root_cause': '单个表空间承担了超过60%的I/O负载，存在I/O热点',
+        'solution': '1. 将热点表分区到多个表空间\n2. 检查热点表空间中的大表是否可以分区\n3. 使用ASM条带化分散I/O\n4. 将热点表空间迁移到高速存储(SSD)',
+        'severity': 'medium',
+    },
+    {
+        'name': 'IOPS 过高',
+        'category': 'io',
+        'conditions': [{"metric": "physical_reads_per_sec", "op": ">", "value": 50000}],
+        'root_cause': '物理读IOPS过高，存储子系统可能接近饱和',
+        'solution': '1. 优化Top SQL减少物理读\n2. 增大Buffer Cache提高缓存命中率\n3. 检查是否有不必要的全表扫描\n4. 评估存储IOPS上限并考虑扩容',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # F. LOAD PROFILE RULES (负载画像)
+    # =========================================================================
+    {
+        'name': 'DB Time 远超 CPU Time',
+        'category': 'load',
+        'conditions': [{"metric": "db_time_ratio", "op": ">", "value": 3.0}],
+        'root_cause': 'DB Time是CPU Time的3倍以上，大量时间花在等待',
+        'solution': '1. 分析Top Wait Events定位等待瓶颈\n2. 检查I/O等待和锁等待\n3. 分析AAS(Average Active Sessions)趋势\n4. 确认是否存在资源瓶颈',
+        'severity': 'high',
+    },
+    {
+        'name': '事务量过高',
+        'category': 'load',
+        'conditions': [{"metric": "transactions_per_sec", "op": ">", "value": 500}],
+        'root_cause': '每秒事务数过高，提交频率大，log file sync压力增大',
+        'solution': '1. 检查是否可以合并小事务为批量操作\n2. 减少自动提交(autocommit=true)\n3. 使用批量DML + 定期COMMIT(每1000-5000行)\n4. 确认redo log I/O性能足够支撑事务量',
+        'severity': 'medium',
+    },
+    {
+        'name': '逻辑读/秒过高',
+        'category': 'load',
+        'conditions': [{"metric": "logical_reads_per_sec", "op": ">", "value": 2000000}],
+        'root_cause': '逻辑读速率极高，CPU消耗大量时间在Buffer Cache查找',
+        'solution': '1. 优化Top SQL减少Buffer Gets\n2. 检查是否有高频执行的小SQL累积造成\n3. 考虑结果集缓存(Result Cache)\n4. 检查是否有不必要的重复查询',
+        'severity': 'medium',
+    },
+
+    # =========================================================================
+    # G. PARSE RULES (解析相关)
+    # =========================================================================
+    {
+        'name': '硬解析比例过高',
+        'category': 'parse',
+        'conditions': [{"metric": "hard_parse_pct", "op": ">", "value": 10}],
+        'root_cause': '硬解析占比过高，消耗大量CPU和shared pool资源',
+        'solution': '1. 推动应用使用绑定变量\n2. 设置cursor_sharing=FORCE(临时方案)\n3. 增大shared_pool_size\n4. 检查是否有动态SQL拼接导致的硬解析',
+        'severity': 'medium',
+    },
+    {
+        'name': '硬解析次数/秒过高',
+        'category': 'parse',
+        'conditions': [{"metric": "hard_parses_per_sec", "op": ">", "value": 100}],
+        'root_cause': '每秒硬解析超过100次，严重消耗CPU和Shared Pool资源',
+        'solution': '1. 分析V$SQL中PLAN_HASH_VALUE唯一但SQL_TEXT仅字面值不同的SQL\n2. 推动开发使用绑定变量\n3. cursor_sharing=FORCE作为紧急措施\n4. 增大SHARED_POOL_SIZE缓解ORA-4031风险',
+        'severity': 'high',
+    },
+    {
+        'name': '总解析次数/秒过高',
+        'category': 'parse',
+        'conditions': [{"metric": "total_parses_per_sec", "op": ">", "value": 1000}],
+        'root_cause': '每秒总解析(含软解析)过高，即使软解析也有Latch开销',
+        'solution': '1. 增大SESSION_CACHED_CURSORS(建议100-200)\n2. 应用端使用Statement Cache减少软解析\n3. 使用PL/SQL Static SQL天然避免解析\n4. 检查应用连接池是否正确复用会话游标',
+        'severity': 'medium',
+    },
+    {
+        'name': 'Parse CPU to Parse Elapsed% 过低',
+        'category': 'parse',
+        'conditions': [{"metric": "parse_cpu_to_elapsed_pct", "op": "<", "value": 50}],
+        'root_cause': '解析时CPU时间远低于解析经历时间，解析过程存在等待(Latch争用或I/O)',
+        'solution': '1. 检查是否有Library Cache Latch争用\n2. 检查Shared Pool是否碎片化\n3. 确认解析期间是否有磁盘I/O(dictionary cache miss)\n4. 增大SHARED_POOL_SIZE减少失效和换出',
+        'severity': 'medium',
+    },
+
+    # =========================================================================
+    # H. RAC RULES (RAC集群)
+    # =========================================================================
+    {
+        'name': 'GC cr block receive time 高',
+        'category': 'rac',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "gc cr block receive time"}],
+        'root_cause': 'RAC节点间Global Cache CR块传输延迟过高',
+        'solution': '1. 检查RAC互联网络带宽和延迟(ping延迟<0.5ms)\n2. 识别热点对象并做实例隔离\n3. 使用服务(Service)将相关SQL路由到同一节点\n4. 检查是否有跨节点锁争用',
+        'severity': 'high',
+    },
+    {
+        'name': 'GC current block receive time 高',
+        'category': 'rac',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "gc current block receive time"}],
+        'root_cause': 'RAC节点间Global Cache Current块传输延迟高，跨节点修改同一块',
+        'solution': '1. 识别跨节点修改的热点表/索引(GV$SEGMENT_STATISTICS)\n2. 使用服务路由DML到单一节点\n3. 对热点表做Hash分区分散修改\n4. 检查互联网络是否存在丢包或延迟抖动',
+        'severity': 'high',
+    },
+    {
+        'name': 'GC buffer busy acquire/release',
+        'category': 'rac',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "gc buffer busy"}],
+        'root_cause': 'RAC GC缓冲区忙等待，多个实例频繁争用同一数据块',
+        'solution': '1. 最常见于序列和索引右侧插入 - 使用大CACHE序列\n2. 使用反转索引减少块争用\n3. 表级分区+实例隔离\n4. 检查是否有不必要的跨节点操作',
+        'severity': 'high',
+    },
+    {
+        'name': 'RAC 互联网络延迟过高',
+        'category': 'rac',
+        'conditions': [{"metric": "gc_cr_block_receive_time", "op": ">", "value": 1.0}],
+        'root_cause': 'RAC节点间数据块传输平均延迟超过1ms，互联网络可能有问题',
+        'solution': '1. 检查私网ping延迟(正常<0.5ms)\n2. 确认互联使用万兆或更高带宽\n3. 检查网卡绑定和UDP/RDS配置\n4. 排查交换机端口错误和丢包率',
+        'severity': 'high',
+    },
+    {
+        'name': 'DRM(Dynamic Remastering)频繁',
+        'category': 'rac',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 3, "event": "gc remaster"}],
+        'root_cause': 'GRD动态资源重主控频繁触发，导致短暂冻结和性能抖动',
+        'solution': '1. 设置_gc_policy_time=0禁用DRM(Oracle推荐非默认场景)\n2. 使用读写分离减少跨节点资源访问\n3. 固定关键对象的主控节点\n4. 升级到最新PSU/RU修复DRM相关bug',
+        'severity': 'medium',
+    },
+
+    # =========================================================================
+    # I. REDO / LOG RULES (日志相关)
+    # =========================================================================
+    {
         'name': 'Redo 生成量过大',
         'category': 'redo',
         'conditions': [{"metric": "redo_size_per_sec", "op": ">", "value": 50000000}],
@@ -126,12 +537,160 @@ BUILTIN_RULES = [
         'severity': 'medium',
     },
     {
-        'name': '热点段争用',
+        'name': '日志切换过于频繁',
+        'category': 'redo',
+        'conditions': [{"metric": "log_switches_per_hour", "op": ">", "value": 6}],
+        'root_cause': '每小时日志切换超过6次(每10分钟一次)，影响性能和归档传输',
+        'solution': '1. 增大redo log文件大小(建议2-4GB)\n2. 确认当前redo log大小: V$LOG\n3. 增加redo log组数减少等待\n4. ALTER DATABASE ADD LOGFILE GROUP N SIZE 2G;',
+        'severity': 'medium',
+    },
+    {
+        'name': 'Redo 日志切换每小时超20次',
+        'category': 'redo',
+        'conditions': [{"metric": "log_switches_per_hour", "op": ">", "value": 20}],
+        'root_cause': '日志切换极其频繁(3分钟一次)，可能触发log file switch等待',
+        'solution': '1. 紧急增大redo log大小到4GB以上\n2. 检查是否有大批量数据加载任务\n3. 确认归档进程能否跟上切换速度\n4. 考虑对大批量操作使用NOLOGGING+后续全备',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # J. SEGMENT RULES (段/对象级)
+    # =========================================================================
+    {
+        'name': '热点段争用 - Buffer Busy Waits',
         'category': 'segment',
         'conditions': [{"metric": "segment_buffer_busy_waits", "op": ">", "value": 1000}],
-        'root_cause': '特定段(表/索引)存在热点争用',
+        'root_cause': '特定段(表/索引)存在热点Buffer Busy Waits争用',
         'solution': '1. 对热点表使用ASSM表空间自动段管理\n2. 增加FREELISTS/FREELIST GROUPS\n3. 考虑反转索引或Hash分区减少右侧插入争用\n4. 检查是否需要增大PCTFREE',
         'severity': 'medium',
+    },
+    {
+        'name': '热点段 - 逻辑读集中',
+        'category': 'segment',
+        'conditions': [{"metric": "segment_logical_reads_pct", "op": ">", "value": 30}],
+        'root_cause': '单个段(表/索引)贡献了超过30%的逻辑读，是主要的缓存消费者',
+        'solution': '1. 优化访问此段的Top SQL\n2. 检查是否缺少合适索引导致全扫\n3. 考虑将热点表放入KEEP缓冲池\n4. 检查分区策略是否能减少扫描范围',
+        'severity': 'medium',
+    },
+    {
+        'name': '热点段 - 物理读集中',
+        'category': 'segment',
+        'conditions': [{"metric": "segment_physical_reads_pct", "op": ">", "value": 30}],
+        'root_cause': '单个段贡献了超过30%的物理读，可能是大表全扫或缓存不足',
+        'solution': '1. 分析该段大小与Buffer Cache大小的比例\n2. 优化相关SQL减少物理读\n3. 考虑分区表减少扫描范围\n4. 将该表空间放到高速存储',
+        'severity': 'medium',
+    },
+    {
+        'name': '热点段 - Row Lock 集中',
+        'category': 'segment',
+        'conditions': [{"metric": "segment_row_lock_waits", "op": ">", "value": 500}],
+        'root_cause': '特定段上行锁等待集中，存在热点行争用',
+        'solution': '1. 分析应用逻辑，识别热点行的更新模式\n2. 优化事务大小减少锁持有时间\n3. 考虑使用乐观锁(版本号)替代悲观锁\n4. 对于计数器类热点行，考虑使用DBMS_LOCK序列化',
+        'severity': 'high',
+    },
+    {
+        'name': '热点段 - ITL Waits',
+        'category': 'segment',
+        'conditions': [{"metric": "segment_itl_waits", "op": ">", "value": 100}],
+        'root_cause': '段的ITL(事务槽)等待，同一块上并发事务过多',
+        'solution': '1. 增大表/索引的INITRANS(ALTER TABLE xxx INITRANS 20)\n2. 需要MOVE/REBUILD使新INITRANS生效\n3. 增大PCTFREE给块留更多空间动态扩展ITL\n4. 分散数据减少单块并发修改',
+        'severity': 'medium',
+    },
+
+    # =========================================================================
+    # K. UNDO / TEMP TABLESPACE RULES (Undo与临时表空间)
+    # =========================================================================
+    {
+        'name': 'Undo 表空间争用',
+        'category': 'undo',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 3, "event": "enq: US - contention"}],
+        'root_cause': 'Undo Segment争用，可能undo表空间过小或undo_retention设置不当',
+        'solution': '1. 增大Undo表空间大小\n2. 调整UNDO_RETENTION参数(默认900s)\n3. 检查是否有长事务占用大量undo空间\n4. 确认UNDO_MANAGEMENT=AUTO',
+        'severity': 'medium',
+    },
+    {
+        'name': 'ORA-1555 / Undo不足风险',
+        'category': 'undo',
+        'conditions': [{"metric": "undo_space_used_pct", "op": ">", "value": 85}],
+        'root_cause': 'Undo表空间使用率过高，存在ORA-1555 Snapshot Too Old风险',
+        'solution': '1. 增大Undo表空间(至少保证UNDO_RETENTION时间内的空间)\n2. 避免长查询与大事务并行\n3. 分析V$UNDOSTAT找到undo使用高峰\n4. 考虑UNDO_RETENTION保证(RETENTION GUARANTEE)',
+        'severity': 'high',
+    },
+    {
+        'name': '临时表空间使用率过高',
+        'category': 'temp',
+        'conditions': [{"metric": "temp_space_used_pct", "op": ">", "value": 80}],
+        'root_cause': '临时表空间使用率过高，可能导致排序/Hash操作失败',
+        'solution': '1. 增大临时表空间(添加临时数据文件)\n2. 优化大排序SQL减少排序集大小\n3. 增大PGA_AGGREGATE_TARGET减少磁盘排序\n4. 检查V$TEMPSEG_USAGE定位占用最多的会话/SQL',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # L. OS / RESOURCE RULES (操作系统与资源管理)
+    # =========================================================================
+    {
+        'name': 'OS CPU 使用率过高',
+        'category': 'os',
+        'conditions': [{"metric": "os_cpu_used_pct", "op": ">", "value": 85}],
+        'root_cause': '操作系统层面CPU使用率过高，数据库与其他进程竞争CPU',
+        'solution': '1. 检查是否有非数据库进程占用CPU\n2. 优化数据库Top SQL减少CPU消耗\n3. 确认CPU没有被频繁的上下文切换浪费\n4. 评估是否需要增加CPU资源或迁移非数据库负载',
+        'severity': 'high',
+    },
+    {
+        'name': 'OS 内存不足(Swap使用)',
+        'category': 'os',
+        'conditions': [{"metric": "os_swap_used_pct", "op": ">", "value": 10}],
+        'root_cause': '操作系统Swap使用超过10%，可能存在物理内存不足',
+        'solution': '1. 检查SGA+PGA总量是否超过物理内存\n2. 设置HugePages锁定SGA避免被swap\n3. 降低PGA_AGGREGATE_TARGET或SGA大小\n4. 检查是否有其他进程(如备份)占用大量内存',
+        'severity': 'high',
+    },
+    {
+        'name': 'OS Load Average 过高',
+        'category': 'os',
+        'conditions': [{"metric": "os_load_avg", "op": ">", "value": 2.0}],
+        'root_cause': 'OS负载均值超过CPU核数2倍，系统排队严重(此处value为per-CPU)',
+        'solution': '1. 检查运行队列中是否有大量等待CPU的进程\n2. 检查是否有I/O等待导致的uninterruptible sleep\n3. 优化数据库负载减少活跃进程数\n4. 考虑增加CPU核数或分散负载',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # M. DATA GUARD / STANDBY RULES (Data Guard相关)
+    # =========================================================================
+    {
+        'name': 'Data Guard Sync 等待过高',
+        'category': 'dataguard',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 5, "event": "LGWR-LNS"}],
+        'root_cause': 'LGWR等待LNS进程同步redo到备库的延迟过高(SYNC模式)',
+        'solution': '1. 检查主备之间网络延迟和带宽\n2. 考虑从MAXIMUM PROTECTION降级到MAXIMUM AVAILABILITY\n3. 使用ASYNC模式如果RPO允许\n4. 确认备库归档和MRP(恢复进程)没有延迟',
+        'severity': 'high',
+    },
+    {
+        'name': 'log file sync 受 Data Guard 影响',
+        'category': 'dataguard',
+        'conditions': [{"metric": "pct_db_time", "op": ">", "value": 10, "event": "log file sync"}, {"metric": "dg_sync_enabled", "op": "==", "value": 1}],
+        'root_cause': '在SYNC Data Guard模式下，每次COMMIT需要等待备库确认，增加了log file sync时间',
+        'solution': '1. 检查V$DATAGUARD_STATS中transport lag\n2. 如果RPO允许切换到ASYNC传输\n3. 优化应用减少COMMIT频率(批量提交)\n4. 使用FAST_START FAILOVER + FASTSYNC(12c+)',
+        'severity': 'high',
+    },
+
+    # =========================================================================
+    # N. STATISTICS & OPTIMIZER RULES (统计信息与优化器)
+    # =========================================================================
+    {
+        'name': '统计信息可能过期',
+        'category': 'optimizer',
+        'conditions': [{"metric": "stale_stats_tables", "op": ">", "value": 5}],
+        'root_cause': '存在统计信息过期的表，可能导致优化器选择次优执行计划',
+        'solution': '1. 执行DBMS_STATS.GATHER_DATABASE_STATS(options=>\'GATHER STALE\')\n2. 检查自动统计信息收集Job是否正常运行\n3. 对关键大表手动收集(ESTIMATE_PERCENT=>DBMS_STATS.AUTO_SAMPLE_SIZE)\n4. 检查DBA_TAB_STATISTICS中STALE_STATS=YES的表',
+        'severity': 'medium',
+    },
+    {
+        'name': '执行计划不稳定(Plan Flip)',
+        'category': 'optimizer',
+        'conditions': [{"metric": "plan_hash_changes", "op": ">", "value": 3}],
+        'root_cause': '关键SQL的执行计划频繁变化(Plan Flip)，导致性能不稳定',
+        'solution': '1. 使用SQL Plan Baseline(SPM)锁定好的执行计划\n2. 创建SQL Profile固定最优计划\n3. 检查统计信息收集是否导致计划变化\n4. 检查ACS(Adaptive Cursor Sharing)行为',
+        'severity': 'high',
     },
 ]
 
@@ -614,20 +1173,57 @@ class MetricScorer:
     # Default thresholds: {metric_key: (warning_threshold, serious_threshold, unit, direction)}
     # direction: 'higher_worse' means higher value = worse, 'lower_worse' means lower = worse
     DEFAULT_THRESHOLDS = {
+        # --- Load / Capacity ---
         'aas_per_cpu': (0.7, 1.0, 'ratio', 'higher_worse'),
+        'db_time_ratio': (1.0, 3.0, 'ratio', 'higher_worse'),
+        'transactions_per_sec': (500.0, 2000.0, 'txn/s', 'higher_worse'),
+        'logical_reads_per_sec': (2_000_000, 5_000_000, 'reads/s', 'higher_worse'),
+        'physical_reads_per_sec': (50_000, 150_000, 'reads/s', 'higher_worse'),
+        # --- Wait Events ---
         'top_event_pct_db_time': (15.0, 30.0, '%DB Time', 'higher_worse'),
         'db_file_sequential_read_avg_wait': (10.0, 20.0, 'ms', 'higher_worse'),
         'db_file_scattered_read_avg_wait': (10.0, 20.0, 'ms', 'higher_worse'),
         'log_file_sync_avg_wait': (5.0, 15.0, 'ms', 'higher_worse'),
+        'log_file_parallel_write_avg_wait': (5.0, 15.0, 'ms', 'higher_worse'),
+        'buffer_busy_waits_avg_wait': (5.0, 20.0, 'ms', 'higher_worse'),
+        'read_by_other_session_avg_wait': (10.0, 30.0, 'ms', 'higher_worse'),
+        'enq_tx_row_lock_avg_wait': (50.0, 200.0, 'ms', 'higher_worse'),
+        # --- Parse ---
         'hard_parse_pct': (10.0, 30.0, '%', 'higher_worse'),
+        'hard_parses_per_sec': (100.0, 500.0, 'parses/s', 'higher_worse'),
+        'total_parses_per_sec': (1000.0, 5000.0, 'parses/s', 'higher_worse'),
+        'execute_to_parse_pct': (50.0, 30.0, '%', 'lower_worse'),
+        'soft_parse_pct': (90.0, 70.0, '%', 'lower_worse'),
+        'parse_cpu_to_elapsed_pct': (50.0, 20.0, '%', 'lower_worse'),
+        # --- SQL Efficiency ---
         'buffer_gets_per_exec': (10000, 100000, 'gets', 'higher_worse'),
         'disk_reads_per_exec': (100, 1000, 'reads', 'higher_worse'),
+        'sql_executions_per_sec': (10000, 50000, 'exec/s', 'higher_worse'),
+        'top1_sql_pct_db_time': (30.0, 50.0, '%DB Time', 'higher_worse'),
+        # --- Memory / Cache ---
         'buffer_cache_hit_ratio': (95.0, 90.0, '%', 'lower_worse'),
         'library_cache_hit_ratio': (99.0, 95.0, '%', 'lower_worse'),
-        'db_time_ratio': (1.0, 3.0, 'ratio', 'higher_worse'),
+        'shared_pool_free_pct': (10.0, 5.0, '%', 'lower_worse'),
+        'in_memory_sort_pct': (95.0, 85.0, '%', 'lower_worse'),
+        'latch_hit_pct': (99.0, 98.0, '%', 'lower_worse'),
+        'pga_over_allocation_count': (0, 100, 'count', 'higher_worse'),
+        # --- I/O ---
         'avg_read_time': (10.0, 20.0, 'ms', 'higher_worse'),
-        'redo_size_per_sec': (50_000_000, 200_000_000, 'bytes', 'higher_worse'),
+        'avg_write_time': (5.0, 15.0, 'ms', 'higher_worse'),
+        'tablespace_io_pct': (60.0, 80.0, '%', 'higher_worse'),
+        # --- Redo ---
+        'redo_size_per_sec': (50_000_000, 200_000_000, 'bytes/s', 'higher_worse'),
+        'log_switches_per_hour': (6, 20, 'switches/hr', 'higher_worse'),
+        # --- RAC ---
         'gc_cr_block_receive_time': (1.0, 3.0, 'ms', 'higher_worse'),
+        'gc_current_block_receive_time': (1.0, 3.0, 'ms', 'higher_worse'),
+        # --- Undo / Temp ---
+        'undo_space_used_pct': (85.0, 95.0, '%', 'higher_worse'),
+        'temp_space_used_pct': (80.0, 95.0, '%', 'higher_worse'),
+        # --- OS ---
+        'os_cpu_used_pct': (85.0, 95.0, '%', 'higher_worse'),
+        'os_swap_used_pct': (10.0, 30.0, '%', 'higher_worse'),
+        'os_load_avg': (2.0, 4.0, 'per CPU', 'higher_worse'),
     }
 
     def __init__(self, custom_thresholds=None):
@@ -680,41 +1276,99 @@ class MetricScorer:
 
     def _get_problem_type(self, metric_key):
         """Map metric key to problem type category."""
-        if metric_key in ('db_file_sequential_read_avg_wait', 'db_file_scattered_read_avg_wait', 'avg_read_time'):
+        IO_KEYS = ('db_file_sequential_read_avg_wait', 'db_file_scattered_read_avg_wait',
+                    'avg_read_time', 'avg_write_time', 'tablespace_io_pct', 'physical_reads_per_sec')
+        WAIT_KEYS = ('log_file_sync_avg_wait', 'log_file_parallel_write_avg_wait',
+                     'top_event_pct_db_time', 'buffer_busy_waits_avg_wait',
+                     'read_by_other_session_avg_wait', 'enq_tx_row_lock_avg_wait')
+        SQL_KEYS = ('buffer_gets_per_exec', 'disk_reads_per_exec', 'sql_executions_per_sec',
+                    'top1_sql_pct_db_time')
+        MEMORY_KEYS = ('buffer_cache_hit_ratio', 'library_cache_hit_ratio', 'shared_pool_free_pct',
+                       'in_memory_sort_pct', 'latch_hit_pct', 'pga_over_allocation_count')
+        PARSE_KEYS = ('hard_parse_pct', 'hard_parses_per_sec', 'total_parses_per_sec',
+                      'execute_to_parse_pct', 'soft_parse_pct', 'parse_cpu_to_elapsed_pct')
+        REDO_KEYS = ('redo_size_per_sec', 'log_switches_per_hour')
+        RAC_KEYS = ('gc_cr_block_receive_time', 'gc_current_block_receive_time')
+        LOAD_KEYS = ('db_time_ratio', 'aas_per_cpu', 'transactions_per_sec', 'logical_reads_per_sec')
+        OS_KEYS = ('os_cpu_used_pct', 'os_swap_used_pct', 'os_load_avg')
+        UNDO_TEMP_KEYS = ('undo_space_used_pct', 'temp_space_used_pct')
+
+        if metric_key in IO_KEYS:
             return 'io'
-        elif metric_key in ('log_file_sync_avg_wait', 'top_event_pct_db_time'):
+        elif metric_key in WAIT_KEYS:
             return 'wait_event'
-        elif metric_key in ('buffer_gets_per_exec', 'disk_reads_per_exec'):
+        elif metric_key in SQL_KEYS:
             return 'sql'
-        elif metric_key in ('buffer_cache_hit_ratio', 'library_cache_hit_ratio'):
+        elif metric_key in MEMORY_KEYS:
             return 'memory'
-        elif metric_key in ('hard_parse_pct',):
+        elif metric_key in PARSE_KEYS:
             return 'parse'
-        elif metric_key in ('redo_size_per_sec',):
+        elif metric_key in REDO_KEYS:
             return 'redo'
-        elif metric_key in ('gc_cr_block_receive_time',):
+        elif metric_key in RAC_KEYS:
             return 'rac'
-        elif metric_key in ('db_time_ratio', 'aas_per_cpu'):
+        elif metric_key in LOAD_KEYS:
             return 'load'
+        elif metric_key in OS_KEYS:
+            return 'os'
+        elif metric_key in UNDO_TEMP_KEYS:
+            return 'undo_temp'
         return 'other'
 
     def _get_problem_title(self, metric_key, value, unit):
         """Generate Chinese title for a problem."""
         titles = {
+            # Load
             'aas_per_cpu': f'平均活跃会话/CPU比率过高 ({value}{unit})',
+            'db_time_ratio': f'DB Time远超CPU Time ({value}{unit})',
+            'transactions_per_sec': f'事务量过高 ({value}{unit})',
+            'logical_reads_per_sec': f'逻辑读/秒过高 ({value}{unit})',
+            'physical_reads_per_sec': f'物理读IOPS过高 ({value}{unit})',
+            # Wait events
             'top_event_pct_db_time': f'Top等待事件占比过高 ({value}{unit})',
             'db_file_sequential_read_avg_wait': f'db file sequential read 平均等待过高 ({value}{unit})',
             'db_file_scattered_read_avg_wait': f'db file scattered read 平均等待过高 ({value}{unit})',
             'log_file_sync_avg_wait': f'log file sync 平均等待过高 ({value}{unit})',
+            'log_file_parallel_write_avg_wait': f'log file parallel write 平均等待过高 ({value}{unit})',
+            'buffer_busy_waits_avg_wait': f'buffer busy waits 平均等待过高 ({value}{unit})',
+            'read_by_other_session_avg_wait': f'read by other session 平均等待过高 ({value}{unit})',
+            'enq_tx_row_lock_avg_wait': f'行锁等待时间过高 ({value}{unit})',
+            # Parse
             'hard_parse_pct': f'硬解析比例过高 ({value}{unit})',
+            'hard_parses_per_sec': f'每秒硬解析次数过高 ({value}{unit})',
+            'total_parses_per_sec': f'每秒总解析次数过高 ({value}{unit})',
+            'execute_to_parse_pct': f'Execute to Parse%过低 ({value}{unit})',
+            'soft_parse_pct': f'软解析比例过低 ({value}{unit})',
+            'parse_cpu_to_elapsed_pct': f'Parse CPU/Elapsed%过低 ({value}{unit})',
+            # SQL
             'buffer_gets_per_exec': f'SQL逻辑读过高 ({value}{unit})',
             'disk_reads_per_exec': f'SQL物理读过高 ({value}{unit})',
+            'sql_executions_per_sec': f'SQL执行频率过高 ({value}{unit})',
+            'top1_sql_pct_db_time': f'Top1 SQL占DB Time过高 ({value}{unit})',
+            # Memory
             'buffer_cache_hit_ratio': f'Buffer Cache 命中率过低 ({value}{unit})',
             'library_cache_hit_ratio': f'Library Cache 命中率过低 ({value}{unit})',
-            'db_time_ratio': f'DB Time远超CPU Time ({value}{unit})',
+            'shared_pool_free_pct': f'Shared Pool 空闲不足 ({value}{unit})',
+            'in_memory_sort_pct': f'内存排序比例过低 ({value}{unit})',
+            'latch_hit_pct': f'Latch命中率过低 ({value}{unit})',
+            'pga_over_allocation_count': f'PGA过度分配 ({value}{unit})',
+            # I/O
             'avg_read_time': f'I/O平均读取延迟过高 ({value}{unit})',
+            'avg_write_time': f'I/O平均写入延迟过高 ({value}{unit})',
+            'tablespace_io_pct': f'单表空间I/O过于集中 ({value}{unit})',
+            # Redo
             'redo_size_per_sec': f'Redo生成量过大 ({value}{unit})',
-            'gc_cr_block_receive_time': f'RAC GC等待过高 ({value}{unit})',
+            'log_switches_per_hour': f'日志切换过于频繁 ({value}{unit})',
+            # RAC
+            'gc_cr_block_receive_time': f'RAC GC CR块传输延迟过高 ({value}{unit})',
+            'gc_current_block_receive_time': f'RAC GC Current块传输延迟过高 ({value}{unit})',
+            # Undo / Temp
+            'undo_space_used_pct': f'Undo表空间使用率过高 ({value}{unit})',
+            'temp_space_used_pct': f'临时表空间使用率过高 ({value}{unit})',
+            # OS
+            'os_cpu_used_pct': f'OS CPU使用率过高 ({value}{unit})',
+            'os_swap_used_pct': f'OS Swap使用过多 ({value}{unit})',
+            'os_load_avg': f'OS负载均值过高 ({value}{unit})',
         }
         return titles.get(metric_key, f'{metric_key} 异常 ({value}{unit})')
 
@@ -912,6 +1566,10 @@ class CorrelationAnalyzer:
         findings.extend(self._check_parse_correlation(parsed_data, problems))
         findings.extend(self._check_rac_correlation(parsed_data, problems))
         findings.extend(self._check_memory_correlation(parsed_data, problems))
+        findings.extend(self._check_temp_pga_correlation(parsed_data, problems))
+        findings.extend(self._check_lock_sql_correlation(parsed_data, problems))
+        findings.extend(self._check_os_db_correlation(parsed_data, problems))
+        findings.extend(self._check_segment_sql_correlation(parsed_data, problems))
         return findings
 
     def _check_io_sql_correlation(self, parsed_data: dict, problems: list) -> list:
@@ -1094,6 +1752,133 @@ class CorrelationAnalyzer:
                 'root_cause': 'Buffer Cache\u8fc7\u5c0f\u6216\u5b58\u5728\u5927\u91cf\u5168\u8868\u626b\u63cf\u5bfc\u81f4\u7269\u7406\u8bfb\u589e\u591a',
                 'suggestion': '\u8003\u8651\u589e\u5927db_cache_size\uff0c\u68c0\u67e5\u5168\u8868\u626b\u63cfSQL\u5e76\u4f18\u5316'
             })
+        return findings
+
+    def _check_temp_pga_correlation(self, parsed_data: dict, problems: list) -> list:
+        """direct path read/write temp high -> check PGA and sort spills."""
+        findings = []
+        temp_problems = [p for p in problems if p.get('metric_name', '') and
+                         ('temp_space' in p.get('metric_name', '') or
+                          'in_memory_sort' in p.get('metric_name', '') or
+                          'pga_over_allocation' in p.get('metric_name', ''))]
+        if not temp_problems:
+            top_events = parsed_data.get('top_events', []) or []
+            for evt in top_events:
+                ename = (evt.get('event', '') or '').lower()
+                pct = float(evt.get('pct_db_time', 0) or 0)
+                if 'direct path' in ename and 'temp' in ename and pct > 5:
+                    temp_problems.append({
+                        'metric_name': 'direct_path_temp',
+                        'title': f'{evt.get("event", "")} 占 DB Time {pct}%',
+                        'metric_value': pct
+                    })
+        if not temp_problems:
+            return findings
+        load_profile = parsed_data.get('load_profile', {})
+        computed = load_profile.get('computed', {}) if isinstance(load_profile, dict) else {}
+        for problem in temp_problems:
+            evidence = [f"{problem.get('title', '临时表空间/PGA问题')}"]
+            if computed.get('physical_reads'):
+                evidence.append(f"Physical Reads/Sec = {computed['physical_reads']}")
+            evidence.append('排序/Hash操作溢出到临时表空间，PGA可能不足')
+            findings.append({
+                'title': '临时表空间压力与PGA不足关联',
+                'trigger_problem': problem.get('title', '临时表空间/PGA问题'),
+                'related_evidence': evidence,
+                'root_cause': 'PGA不足导致排序/Hash Join溢出到磁盘临时表空间',
+                'suggestion': '增大PGA_AGGREGATE_TARGET，优化大排序SQL减少排序集'
+            })
+        return findings
+
+    def _check_lock_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+        """TX row lock / TM contention -> check SQL and segment stats."""
+        findings = []
+        lock_problems = [p for p in problems if p.get('metric_name', '') and
+                         ('enq_tx_row_lock' in p.get('metric_name', '') or
+                          'tx' in p.get('metric_name', '').lower())]
+        if not lock_problems:
+            top_events = parsed_data.get('top_events', []) or []
+            for evt in top_events:
+                ename = (evt.get('event', '') or '').lower()
+                pct = float(evt.get('pct_db_time', 0) or 0)
+                if ('enq: tx' in ename or 'enq: tm' in ename) and pct > 5:
+                    lock_problems.append({
+                        'metric_name': 'lock_event',
+                        'title': f'{evt.get("event", "")} 占 DB Time {pct}%',
+                        'metric_value': pct
+                    })
+        if not lock_problems:
+            return findings
+        segment_stats = parsed_data.get('segment_stats', []) or []
+        top_sql = parsed_data.get('top_sql', {}) or {}
+        sql_by_elapsed = top_sql.get('SQL ordered by Elapsed Time', []) or []
+        for problem in lock_problems:
+            evidence = [f"{problem.get('title', '锁等待问题')}"]
+            for seg in segment_stats[:3]:
+                seg_name = seg.get('Segment Name', seg.get('name', ''))
+                if seg_name:
+                    evidence.append(f"热点段: {seg_name}")
+            for sql in sql_by_elapsed[:2]:
+                sql_id = sql.get('sql_id', sql.get('SQL Id', ''))
+                if sql_id:
+                    evidence.append(f"Top SQL_ID: {sql_id}")
+            findings.append({
+                'title': '锁争用与热点段/SQL关联',
+                'trigger_problem': problem.get('title', '锁等待'),
+                'related_evidence': evidence,
+                'root_cause': '热点段上的并发DML导致行锁或表锁争用',
+                'suggestion': '优化事务粒度和持有时间，检查外键是否缺少索引'
+            })
+        return findings
+
+    def _check_os_db_correlation(self, parsed_data: dict, problems: list) -> list:
+        """OS CPU/memory high -> correlate with DB load."""
+        findings = []
+        os_problems = [p for p in problems if p.get('metric_name', '') and
+                       p.get('metric_name', '').startswith('os_')]
+        if not os_problems:
+            return findings
+        load_profile = parsed_data.get('load_profile', {})
+        computed = load_profile.get('computed', {}) if isinstance(load_profile, dict) else {}
+        for problem in os_problems:
+            evidence = [f"{problem.get('title', 'OS资源问题')}"]
+            if computed.get('db_time'):
+                evidence.append(f"DB Time/Sec = {computed['db_time']}")
+            if computed.get('db_cpu'):
+                evidence.append(f"DB CPU/Sec = {computed['db_cpu']}")
+            findings.append({
+                'title': 'OS资源压力与数据库负载关联',
+                'trigger_problem': problem.get('title', 'OS资源问题'),
+                'related_evidence': evidence,
+                'root_cause': '数据库高负载消耗OS资源，或外部进程与数据库竞争资源',
+                'suggestion': '优化数据库Top SQL降低资源消耗，检查非数据库进程占用'
+            })
+        return findings
+
+    def _check_segment_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+        """Hot segment -> correlate with Top SQL accessing that segment."""
+        findings = []
+        seg_problems = [p for p in problems if p.get('problem_type', '') == 'segment' or
+                        ('segment' in p.get('metric_name', '').lower())]
+        if not seg_problems:
+            return findings
+        top_sql = parsed_data.get('top_sql', {}) or {}
+        sql_by_gets = top_sql.get('SQL ordered by Gets', []) or []
+        for problem in seg_problems:
+            evidence = [f"{problem.get('title', '热点段问题')}"]
+            for sql in sql_by_gets[:3]:
+                sql_id = sql.get('sql_id', sql.get('SQL Id', ''))
+                gets = sql.get('buffer_gets_per_exec', sql.get('Buffer Gets per Exec', ''))
+                if sql_id:
+                    evidence.append(f"SQL_ID={sql_id} Gets/Exec={gets}")
+            if len(evidence) > 1:
+                findings.append({
+                    'title': '热点段与高逻辑读SQL关联',
+                    'trigger_problem': problem.get('title', '热点段'),
+                    'related_evidence': evidence,
+                    'root_cause': '高频SQL访问热点段导致段级争用和缓存压力',
+                    'suggestion': '优化SQL减少对热点段的访问频率和范围'
+                })
         return findings
 
 
