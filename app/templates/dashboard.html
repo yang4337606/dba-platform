@@ -61,19 +61,19 @@
     </div>
     {% if recent_analyses %}
     <table>
-      <thead><tr><th>报告</th><th>评分</th><th>类型</th><th>时间</th></tr></thead>
+      <thead><tr><th>报告</th><th>健康</th><th>类型</th><th>时间</th></tr></thead>
       <tbody>
       {% for a in recent_analyses %}
       <tr>
         <td><a href="{{ url_for('awr.view_analysis', report_id=a.report_id, analysis_id=a.id) }}">报告 #{{ a.report_id }}</a></td>
         <td>
-          <span class="{% if a.performance_score >= 80 %}score-good{% elif a.performance_score >= 60 %}score-warn{% else %}score-bad{% endif %}" style="font-family:var(--font-mono);font-weight:700;">
-            {{ a.performance_score }}
+          <span class="badge badge-{% if a.health_level == 'healthy' %}success{% elif a.health_level == 'warning' %}warning{% else %}danger{% endif %}">
+            {{ a.health_level }}
           </span>
         </td>
         <td>
-          {% if a.analysis_type == 'llm' %}<span class="llm-badge">LLM</span>
-          {% else %}<span class="badge badge-info">自动</span>{% endif %}
+          {% if a.analysis_type == 'combined' %}<span class="llm-badge">LLM</span>
+          {% else %}<span class="badge badge-info">规则</span>{% endif %}
         </td>
         <td style="font-size:12px;color:var(--text-muted);">{{ a.created_at.strftime('%m-%d %H:%M') }}</td>
       </tr>

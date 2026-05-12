@@ -22,7 +22,7 @@
   {% endfor %}
 </div>
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
   <div class="card">
     <div class="card-header">按分类分布</div>
     {% for cat, cnt in by_category %}
@@ -34,15 +34,25 @@
   </div>
 
   <div class="card">
+    <div class="card-header">按状态分布</div>
+    {% for st, cnt in by_status %}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span class="badge badge-{% if st == 'active' %}success{% elif st == 'observed' %}info{% elif st == 'candidate' %}warning{% elif st == 'stale' %}muted{% else %}danger{% endif %}">{{ st }}</span>
+      <span style="font-family:var(--font-mono);font-weight:600;">{{ cnt }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
     <div class="card-header">高频匹配 Top 10</div>
     {% for entry in top_matched %}
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <div>
-        <div style="font-size:13px;font-weight:500;">{{ entry.title }}</div>
+        <div style="font-size:13px;font-weight:500;">{{ entry.name }}</div>
         <div style="font-size:11px;color:var(--text-muted);">{{ entry.category }} &middot; {{ entry.source }}</div>
       </div>
       <div style="text-align:right;">
-        <div style="font-family:var(--font-mono);font-weight:700;">{{ entry.match_count }}</div>
+        <div style="font-family:var(--font-mono);font-weight:700;">{{ entry.hit_count }}</div>
         <div style="font-size:10px;color:var(--text-muted);">匹配</div>
       </div>
     </div>

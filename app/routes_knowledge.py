@@ -1,7 +1,7 @@
 import json
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
-from .models import db, KnowledgeBase, AuditLog
+from .models import db, KnowledgeRule, AuditLog
 
 kb_bp = Blueprint('knowledge', __name__, url_prefix='/knowledge')
 
@@ -12,19 +12,29 @@ def list_entries():
     page = request.args.get('page', 1, type=int)
     category = request.args.get('category', '')
     source = request.args.get('source', '')
-    query = KnowledgeBase.query
+    status = request.args.get('status', '')
+
+    query = KnowledgeRule.query
     if category:
         query = query.filter_by(category=category)
     if source:
         query = query.filter_by(source=source)
-    entries = query.order_by(KnowledgeBase.match_count.desc()).paginate(page=page, per_page=20)
+    if status:
+        query = query.filter_by(status=status)
 
-    categories = db.session.query(KnowledgeBase.category).distinct().all()
-    sources = db.session.query(KnowledgeBase.source).distinct().all()
+    entries = query.order_by(KnowledgeRule.hit_count.desc()).paginate(page=page, per_page=20)
+
+    categories = db.session.query(KnowledgeRule.category).distinct().all()
+    sources = db.session.query(KnowledgeRule.source).distinct().all()
+    statuses = db.session.query(KnowledgeRule.status).distinct().all()
+
     return render_template('knowledge/list.html', entries=entries,
                            categories=[c[0] for c in categories],
                            sources=[s[0] for s in sources],
-                           current_category=category, current_source=source)
+                           statuses=[s[0] for s in statuses],
+                           current_category=category,
+                           current_source=source,
+                           current_status=status)
 
 
 @kb_bp.route('/add', methods=['GET', 'POST'])
@@ -35,21 +45,23 @@ def add_entry():
         return redirect(url_for('knowledge.list_entries'))
 
     if request.method == 'POST':
-        entry = KnowledgeBase(
+        entry = KnowledgeRule(
+            name=request.form.get('name', ''),
             category=request.form.get('category', 'general'),
-            title=request.form.get('title', ''),
-            pattern=request.form.get('pattern', ''),
-            description=request.form.get('description', ''),
+            conditions_json=request.form.get('conditions_json', '[]'),
+            root_cause=request.form.get('root_cause', ''),
             solution=request.form.get('solution', ''),
             severity=request.form.get('severity', 'medium'),
             source='manual',
             confidence=0.7,
+            status='active',
+            is_active=True,
         )
         db.session.add(entry)
         db.session.add(AuditLog(user_id=current_user.id, action='add_knowledge',
-                                detail=entry.title, ip_address=request.remote_addr))
+                                detail=entry.name, ip_address=request.remote_addr))
         db.session.commit()
-        flash('知识条目已添加', 'success')
+        flash('知识规则已添加', 'success')
         return redirect(url_for('knowledge.list_entries'))
 
     return render_template('knowledge/edit.html', entry=None)
@@ -62,19 +74,21 @@ def edit_entry(entry_id):
         flash('无权限', 'error')
         return redirect(url_for('knowledge.list_entries'))
 
-    entry = KnowledgeBase.query.get_or_404(entry_id)
+    entry = KnowledgeRule.query.get_or_404(entry_id)
     if request.method == 'POST':
+        entry.name = request.form.get('name', entry.name)
         entry.category = request.form.get('category', entry.category)
-        entry.title = request.form.get('title', entry.title)
-        entry.pattern = request.form.get('pattern', entry.pattern)
-        entry.description = request.form.get('description', entry.description)
+        entry.conditions_json = request.form.get('conditions_json', entry.conditions_json)
+        entry.root_cause = request.form.get('root_cause', entry.root_cause)
         entry.solution = request.form.get('solution', entry.solution)
         entry.severity = request.form.get('severity', entry.severity)
         entry.is_active = request.form.get('is_active') == 'on'
+        entry.status = request.form.get('status', entry.status)
+
         db.session.add(AuditLog(user_id=current_user.id, action='edit_knowledge',
-                                detail=entry.title, ip_address=request.remote_addr))
+                                detail=entry.name, ip_address=request.remote_addr))
         db.session.commit()
-        flash('知识条目已更新', 'success')
+        flash('知识规则已更新', 'success')
         return redirect(url_for('knowledge.list_entries'))
 
     return render_template('knowledge/edit.html', entry=entry)
@@ -87,25 +101,28 @@ def delete_entry(entry_id):
         flash('仅管理员可删除', 'error')
         return redirect(url_for('knowledge.list_entries'))
 
-    entry = KnowledgeBase.query.get_or_404(entry_id)
+    entry = KnowledgeRule.query.get_or_404(entry_id)
     db.session.delete(entry)
     db.session.commit()
-    flash('知识条目已删除', 'success')
+    flash('知识规则已删除', 'success')
     return redirect(url_for('knowledge.list_entries'))
 
 
 @kb_bp.route('/stats')
 @login_required
 def stats():
-    total = KnowledgeBase.query.count()
+    total = KnowledgeRule.query.count()
     by_category = db.session.query(
-        KnowledgeBase.category, db.func.count(KnowledgeBase.id)
-    ).group_by(KnowledgeBase.category).all()
+        KnowledgeRule.category, db.func.count(KnowledgeRule.id)
+    ).group_by(KnowledgeRule.category).all()
     by_source = db.session.query(
-        KnowledgeBase.source, db.func.count(KnowledgeBase.id)
-    ).group_by(KnowledgeBase.source).all()
-    top_matched = KnowledgeBase.query.order_by(KnowledgeBase.match_count.desc()).limit(10).all()
+        KnowledgeRule.source, db.func.count(KnowledgeRule.id)
+    ).group_by(KnowledgeRule.source).all()
+    by_status = db.session.query(
+        KnowledgeRule.status, db.func.count(KnowledgeRule.id)
+    ).group_by(KnowledgeRule.status).all()
+    top_matched = KnowledgeRule.query.order_by(KnowledgeRule.hit_count.desc()).limit(10).all()
 
     return render_template('knowledge/stats.html', total=total,
                            by_category=by_category, by_source=by_source,
-                           top_matched=top_matched)
+                           by_status=by_status, top_matched=top_matched)

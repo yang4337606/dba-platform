@@ -6,7 +6,7 @@
     <h1 class="page-title">{{ report.title }}</h1>
     <div class="page-subtitle">
       {{ report.db_name or '未知' }} / {{ report.instance_name or '未知' }}
-      &middot; 快照 #{{ report.snap_begin or '?' }} - #{{ report.snap_end or '?' }}
+      &middot; 快照 #{{ report.snap_begin_id or '?' }} - #{{ report.snap_end_id or '?' }}
     </div>
   </div>
   <div class="btn-group">
@@ -41,22 +41,28 @@
     <div class="stat-label">主机</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="font-size:16px;">{{ report.snap_duration or 'N/A' }}</div>
+    <div class="stat-value" style="font-size:16px;">{{ report.elapsed_seconds or 'N/A' }}s</div>
     <div class="stat-label">采集时长</div>
   </div>
 </div>
 
 <!-- Top Wait Events -->
-{% if parsed.get('top_events') %}
+{% if metrics_by_type.get('wait_event') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9670; Top 等待事件 ({{ parsed.top_events|length }})</div>
+  <div class="analysis-header">&#9670; Top 等待事件 ({{ metrics_by_type['wait_event']|length }})</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr>{% for key in parsed.top_events[0].keys() %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+      <thead><tr><th>#</th><th>事件名称</th><th>%DB Time</th><th>单位</th><th>平均等待</th></tr></thead>
       <tbody>
-      {% for evt in parsed.top_events[:15] %}
-      <tr>{% for val in evt.values() %}<td style="font-size:12px;">{{ val }}</td>{% endfor %}</tr>
+      {% for m in metrics_by_type['wait_event'][:15] %}
+      <tr>
+        <td style="font-size:12px;">{{ m.rank_order or loop.index }}</td>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+        <td style="font-size:12px;">{{ m.metric_unit }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ (m.extra_json|fromjson).get('avg_wait', '-') if m.extra_json else '-' }}</td>
+      </tr>
       {% endfor %}
       </tbody>
     </table>
@@ -66,16 +72,20 @@
 {% endif %}
 
 <!-- Load Profile -->
-{% if parsed.get('load_profile') %}
+{% if metrics_by_type.get('load_profile') %}
 <div class="analysis-section">
   <div class="analysis-header">&#9632; 负载概况</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr>{% for key in parsed.load_profile[0].keys() %}<th>{{ key }}</th>{% endfor %}</tr></thead>
+      <thead><tr><th>指标</th><th>值</th><th>单位</th></tr></thead>
       <tbody>
-      {% for item in parsed.load_profile[:20] %}
-      <tr>{% for val in item.values() %}<td style="font-size:12px;">{{ val }}</td>{% endfor %}</tr>
+      {% for m in metrics_by_type['load_profile'][:20] %}
+      <tr>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+        <td style="font-size:12px;">{{ m.metric_unit }}</td>
+      </tr>
       {% endfor %}
       </tbody>
     </table>
@@ -90,21 +100,21 @@
   <h3 style="font-size:16px;font-weight:600;margin-bottom:12px;">分析记录</h3>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>ID</th><th>类型</th><th>评分</th><th>分析师</th><th>时间</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>类型</th><th>健康等级</th><th>分析师</th><th>时间</th><th>操作</th></tr></thead>
     <tbody>
     {% for a in analyses %}
     <tr>
       <td style="font-family:var(--font-mono);">#{{ a.id }}</td>
       <td>
-        {% if a.analysis_type == 'llm' %}<span class="llm-badge">LLM</span>
+        {% if a.analysis_type == 'llm' or a.analysis_type == 'combined' %}<span class="llm-badge">LLM</span>
         {% else %}<span class="badge badge-info">自动</span>{% endif %}
       </td>
       <td>
-        <span class="{% if a.performance_score >= 80 %}score-good{% elif a.performance_score >= 60 %}score-warn{% else %}score-bad{% endif %}" style="font-family:var(--font-mono);font-weight:700;">
-          {{ a.performance_score }}
+        <span class="badge badge-{% if a.health_level == 'healthy' %}success{% elif a.health_level == 'warning' %}warning{% else %}danger{% endif %}">
+          {{ a.health_level|upper }}
         </span>
       </td>
-      <td>{{ a.author.username if a.author else '-' }}</td>
+      <td>{{ a.analyst.username if a.analyst else '-' }}</td>
       <td style="font-size:12px;">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
       <td><a href="{{ url_for('awr.view_analysis', report_id=report.id, analysis_id=a.id) }}" class="btn btn-sm btn-primary">查看分析</a></td>
     </tr>

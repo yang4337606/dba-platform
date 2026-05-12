@@ -14,7 +14,7 @@
       <div class="form-group">
         <label class="form-label">分类</label>
         <select name="category" class="form-select">
-          {% for cat in ['wait_event', 'sql_pattern', 'io_pattern', 'memory', 'general'] %}
+          {% for cat in ['wait_event', 'sql', 'io', 'memory', 'redo', 'rac', 'parse', 'general'] %}
           <option value="{{ cat }}" {% if entry and entry.category == cat %}selected{% endif %}>{{ cat }}</option>
           {% endfor %}
         </select>
@@ -29,22 +29,30 @@
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">标题</label>
-      <input type="text" name="title" class="form-input" value="{{ entry.title if entry else '' }}" required>
+      <label class="form-label">规则名称</label>
+      <input type="text" name="name" class="form-input" value="{{ entry.name if entry else '' }}" required>
     </div>
     <div class="form-group">
-      <label class="form-label">匹配模式 (正则表达式)</label>
-      <input type="text" name="pattern" class="form-input" value="{{ entry.pattern if entry else '' }}" placeholder="例: db file sequential read">
+      <label class="form-label">条件 (JSON)</label>
+      <textarea name="conditions_json" class="form-textarea" placeholder='[{"metric": "pct_db_time", "op": ">", "value": 30}]'>{{ entry.conditions_json if entry else '[{"metric": "", "op": ">", "value": 0}]' }}</textarea>
     </div>
     <div class="form-group">
-      <label class="form-label">描述</label>
-      <textarea name="description" class="form-textarea" required>{{ entry.description if entry else '' }}</textarea>
+      <label class="form-label">根因分析</label>
+      <textarea name="root_cause" class="form-textarea" required>{{ entry.root_cause if entry else '' }}</textarea>
     </div>
     <div class="form-group">
       <label class="form-label">解决方案</label>
       <textarea name="solution" class="form-textarea" style="min-height:150px;">{{ entry.solution if entry else '' }}</textarea>
     </div>
     {% if entry %}
+    <div class="form-group">
+      <label class="form-label">状态</label>
+      <select name="status" class="form-select">
+        {% for st in ['candidate', 'observed', 'active', 'stale', 'rejected'] %}
+        <option value="{{ st }}" {% if entry.status == st %}selected{% endif %}>{{ st }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div class="form-group form-checkbox">
       <input type="checkbox" name="is_active" id="is_active" {% if entry.is_active %}checked{% endif %}>
       <label for="is_active" style="font-size:13px;">启用此规则</label>

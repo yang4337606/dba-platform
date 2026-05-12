@@ -24,7 +24,7 @@
       <td><a href="{{ url_for('awr.view_report', report_id=r.id) }}">{{ r.title }}</a></td>
       <td style="font-family:var(--font-mono);font-size:12px;">{{ r.db_name or '-' }}</td>
       <td style="font-family:var(--font-mono);font-size:12px;">{{ r.instance_name or '-' }}</td>
-      <td style="font-size:12px;">{{ r.snap_begin or '?' }} - {{ r.snap_end or '?' }}</td>
+      <td style="font-size:12px;">{{ r.snap_begin_id or '?' }} - {{ r.snap_end_id or '?' }}</td>
       <td>
         {% if r.status == 'analyzed' %}<span class="badge badge-success">已分析</span>
         {% elif r.status == 'parsed' %}<span class="badge badge-info">已解析</span>

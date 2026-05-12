@@ -1,7 +1,7 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from functools import wraps
-from .models import db, User, AWRReport, AWRAnalysis, KnowledgeBase, AuditLog, SystemSetting, GitHubProject
+from .models import db, User, AWRReport, AWRAnalysisResult, KnowledgeRule, AuditLog, SystemSetting, GitHubProject
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -23,10 +23,10 @@ def index():
     stats = {
         'users': User.query.count(),
         'reports': AWRReport.query.count(),
-        'analyses': AWRAnalysis.query.count(),
-        'knowledge': KnowledgeBase.query.count(),
+        'analyses': AWRAnalysisResult.query.count(),
+        'knowledge': KnowledgeRule.query.count(),
         'projects': GitHubProject.query.count(),
-        'learned_kb': KnowledgeBase.query.filter_by(source='learned').count(),
+        'learned_kb': KnowledgeRule.query.filter_by(source='learned').count(),
     }
     recent_logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(20).all()
     return render_template('admin/index.html', stats=stats, recent_logs=recent_logs)

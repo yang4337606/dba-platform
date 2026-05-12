@@ -1,8 +1,9 @@
 import os
+import json
 from flask import Flask
 from flask_login import LoginManager
 from .config import Config
-from .models import db, User
+from .models import db, User, KnowledgeRule, SystemSetting
 
 login_manager = LoginManager()
 login_manager.login_view = 'auth.login'
@@ -40,6 +41,13 @@ def create_app():
     app.register_blueprint(admin_bp)
     app.register_blueprint(projects_bp)
 
+    # Custom Jinja2 filters
+    @app.template_filter('fromjson')
+    def fromjson_filter(value):
+        if value:
+            return json.loads(value)
+        return {}
+
     with app.app_context():
         db.create_all()
         _seed_defaults(app)
@@ -48,9 +56,8 @@ def create_app():
 
 
 def _seed_defaults(app):
-    """Create default admin user and seed knowledge base."""
-    from .models import KnowledgeBase, SystemSetting
-    from .awr_engine import AWRAnalyzer
+    """Create default admin user and seed knowledge rules."""
+    from .awr_engine import BUILTIN_RULES
 
     # Default admin
     if not User.query.filter_by(username='admin').first():
@@ -59,18 +66,24 @@ def _seed_defaults(app):
         db.session.add(admin)
         db.session.commit()
 
-    # Seed builtin knowledge
-    if KnowledgeBase.query.filter_by(source='builtin').count() == 0:
-        for rule in AWRAnalyzer.BUILTIN_RULES:
-            entry = KnowledgeBase(
+    # Seed builtin knowledge rules
+    if KnowledgeRule.query.filter_by(source='builtin').count() == 0:
+        for rule in BUILTIN_RULES:
+            entry = KnowledgeRule(
+                name=rule['name'],
                 category=rule['category'],
-                title=rule['title'],
-                pattern=rule.get('pattern', ''),
-                description=rule['description'],
-                solution=rule.get('solution', ''),
-                severity=rule.get('severity', 'medium'),
+                conditions_json=json.dumps(rule['conditions'], ensure_ascii=False),
+                root_cause=rule['root_cause'],
+                solution=rule['solution'],
+                severity=rule['severity'],
+                confidence=0.9,
+                status='active',
                 source='builtin',
-                confidence=0.8,
+                is_active=True,
             )
             db.session.add(entry)
         db.session.commit()
+
+    # Seed default system settings
+    if not SystemSetting.get('llm_provider'):
+        SystemSetting.set('llm_provider', 'none')
