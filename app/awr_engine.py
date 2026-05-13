@@ -700,6 +700,354 @@ BUILTIN_RULES_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
+# ORACLE PARAMETER RECOMMENDATION KNOWLEDGE BASE
+# ---------------------------------------------------------------------------
+
+# Each entry: parameter -> {description, formula/default, version_notes}
+PARAMETER_RECOMMENDATIONS = {
+    # --- Memory ---
+    'SGA_TARGET': {
+        'description': 'SGA自动管理总大小',
+        'recommendation': '物理内存的40-60%(留给OS和PGA)',
+        'formula': 'physical_memory * 0.5',
+        'min_value': '1G',
+        'notes': '设置SGA_TARGET后，DB_CACHE_SIZE/SHARED_POOL_SIZE等成为下限',
+    },
+    'SGA_MAX_SIZE': {
+        'description': 'SGA最大允许值',
+        'recommendation': '>=SGA_TARGET，建议等于SGA_TARGET避免碎片',
+        'formula': 'SGA_TARGET',
+        'notes': '增大需要重启实例',
+    },
+    'PGA_AGGREGATE_TARGET': {
+        'description': 'PGA自动管理目标大小',
+        'recommendation': '物理内存的15-25%，OLTP环境偏低，DSS/DW偏高',
+        'formula': 'physical_memory * 0.2',
+        'min_value': '512M',
+        'trigger_when': ['in_memory_sort_pct < 95', 'pga_over_allocation_count > 0', 'direct path write temp 高等待'],
+    },
+    'DB_CACHE_SIZE': {
+        'description': 'Buffer Cache大小(SGA_TARGET下为下限)',
+        'recommendation': 'SGA的60-80%用于Buffer Cache',
+        'trigger_when': ['buffer_cache_hit_ratio < 95', 'db file sequential read 高', 'free buffer waits'],
+        'notes': '参考Buffer Pool Advisory选择最佳值',
+    },
+    'SHARED_POOL_SIZE': {
+        'description': 'Shared Pool大小(SGA_TARGET下为下限)',
+        'recommendation': 'SGA的10-20%，硬解析多时增大',
+        'trigger_when': ['library_cache_hit_ratio < 95', 'hard_parse_pct > 10', 'latch: shared pool'],
+        'min_value': '300M',
+        'notes': '参考Shared Pool Advisory',
+    },
+    'SHARED_POOL_RESERVED_SIZE': {
+        'description': 'Shared Pool保留区(大对象加载)',
+        'recommendation': 'SHARED_POOL_SIZE的5-10%',
+        'formula': 'shared_pool_size * 0.05',
+    },
+    'MEMORY_TARGET': {
+        'description': 'AMM自动内存管理(SGA+PGA)',
+        'recommendation': '在Linux上建议不用AMM，改用ASMM(SGA_TARGET+PGA_AGGREGATE_TARGET)',
+        'notes': '11g+可用，但Linux HugePages不兼容AMM。RAC环境不建议使用',
+    },
+    # --- Redo / Log ---
+    'LOG_BUFFER': {
+        'description': 'Redo Log Buffer大小',
+        'recommendation': '16-64MB，log buffer space等待时增大',
+        'default': '自动(隐含约几MB)',
+        'trigger_when': ['log buffer space 高等待'],
+    },
+    'LOG_CHECKPOINT_INTERVAL': {
+        'description': '检查点间隔(OS blocks)',
+        'recommendation': '0(由redo log大小自动控制)',
+        'notes': '通常不需要手动设置，增大redo log文件即可',
+    },
+    # --- Cursor / Parse ---
+    'SESSION_CACHED_CURSORS': {
+        'description': '每会话缓存游标数',
+        'recommendation': '100-200',
+        'default': '50(很多版本)',
+        'trigger_when': ['soft_parse_pct < 95', 'execute_to_parse_pct < 50'],
+        'notes': '增大可减少软解析开销',
+    },
+    'OPEN_CURSORS': {
+        'description': '每会话最大打开游标数',
+        'recommendation': '300-1000',
+        'default': '50',
+        'notes': '设小会导致ORA-1000，设大只占少量内存',
+    },
+    'CURSOR_SHARING': {
+        'description': '自动绑定变量替换',
+        'recommendation': 'EXACT(默认)。仅在无法修改应用时设FORCE作为紧急措施',
+        'trigger_when': ['hard_parse_pct > 30'],
+        'notes': 'FORCE会导致部分SQL执行计划次优，SIMILAR已在11.2废弃',
+    },
+    # --- Parallel ---
+    'PARALLEL_MAX_SERVERS': {
+        'description': '最大并行进程数',
+        'recommendation': 'CPU_COUNT * 2 (OLTP)，CPU_COUNT * 4 (DW)',
+        'notes': '过大可能导致os thread startup等待和资源争用',
+    },
+    'PARALLEL_MIN_SERVERS': {
+        'description': '预启动的并行进程数',
+        'recommendation': '常用并行度的总和，避免os thread startup等待',
+        'trigger_when': ['os thread startup 高等待'],
+    },
+    # --- Undo ---
+    'UNDO_RETENTION': {
+        'description': 'Undo保留时间(秒)',
+        'recommendation': '900-3600，有长查询需更大',
+        'default': '900',
+        'trigger_when': ['undo_space_used_pct > 85', 'ORA-1555'],
+    },
+    'UNDO_TABLESPACE': {
+        'description': 'Undo表空间名称',
+        'recommendation': '确保自动扩展，大小足够UNDO_RETENTION时间内的undo量',
+    },
+    # --- Optimizer ---
+    'OPTIMIZER_ADAPTIVE_FEATURES': {
+        'description': '12c自适应优化器特性',
+        'recommendation': '12.1建议FALSE(bug多)，12.2+拆分为两个参数',
+        'notes': '12.2+使用OPTIMIZER_ADAPTIVE_PLANS和OPTIMIZER_ADAPTIVE_STATISTICS',
+    },
+    'OPTIMIZER_INDEX_CACHING': {
+        'description': '优化器假设索引数据在缓存中的比例',
+        'recommendation': '0-100，NL Join多时设50-90可鼓励索引访问',
+        'default': '0',
+    },
+    'OPTIMIZER_INDEX_COST_ADJ': {
+        'description': '索引访问成本调整因子',
+        'recommendation': '10-50 鼓励走索引(默认100等同全扫)',
+        'default': '100',
+        'notes': '谨慎修改，全局影响大。优先用SQL Profile/Hint针对性调优',
+    },
+    # --- I/O ---
+    'FILESYSTEMIO_OPTIONS': {
+        'description': '文件系统I/O选项',
+        'recommendation': 'SETALL(启用异步I/O和直接I/O)',
+        'trigger_when': ['db file sequential read 高', 'free buffer waits'],
+        'notes': 'Linux上使用ext4/xfs时建议SETALL。ASM自动管理',
+    },
+    'DISK_ASYNCH_IO': {
+        'description': '异步I/O开关',
+        'recommendation': 'TRUE(默认)',
+        'notes': '仅在特定存储有bug时才设FALSE',
+    },
+    'DB_FILE_MULTIBLOCK_READ_COUNT': {
+        'description': '多块读块数(全扫描)',
+        'recommendation': '让Oracle自动管理(不设置)，或128',
+        'default': '自动(基于I/O大小)',
+        'notes': '设置过大会让优化器倾向全扫描',
+    },
+    # --- Process / Session ---
+    'PROCESSES': {
+        'description': '最大进程数',
+        'recommendation': '预期并发连接数 * 1.2 + 后台进程(~50)',
+        'notes': '修改需重启。SESSIONS自动为PROCESSES*1.5+22',
+    },
+    'DB_WRITER_PROCESSES': {
+        'description': 'DBWR进程数',
+        'recommendation': '1-8，I/O密集型增加到CPU_COUNT/8',
+        'trigger_when': ['free buffer waits', 'write complete waits'],
+    },
+    # --- RAC ---
+    '_GC_POLICY_TIME': {
+        'description': 'DRM重主控评估间隔(隐藏参数)',
+        'recommendation': '0(禁用DRM) - 仅在DRM导致性能抖动时',
+        'trigger_when': ['gc remaster 高等待'],
+        'notes': '隐藏参数，修改需Oracle Support建议',
+    },
+    # --- Statistics ---
+    'STATISTICS_LEVEL': {
+        'description': '统计信息收集级别',
+        'recommendation': 'TYPICAL(默认)。ALL增加10%开销但提供更多诊断',
+        'notes': '不要设BASIC，会禁用ADDM/AWR等诊断功能',
+    },
+    'RESULT_CACHE_MAX_SIZE': {
+        'description': '结果集缓存大小',
+        'recommendation': 'SHARED_POOL_SIZE的1-5%，适用于静态数据的重复查询',
+        'trigger_when': ['logical_reads_per_sec > 2000000'],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# ORACLE VERSION-SPECIFIC DIAGNOSTIC KNOWLEDGE
+# ---------------------------------------------------------------------------
+
+VERSION_SPECIFIC_KNOWLEDGE = {
+    '11.2': [
+        {
+            'feature': 'Serial Direct Path Read',
+            'description': '11g开始大表(>5*buffer_cache)自动走direct path read绕过Buffer Cache',
+            'impact': 'db file sequential read减少但direct path read增加，不一定是问题',
+            'parameter': '_serial_direct_read=FALSE 可禁用(不推荐)',
+            'diagnosis': '如果direct path read等待高且buffer cache足够大，检查_small_table_threshold',
+        },
+        {
+            'feature': 'Adaptive Cursor Sharing',
+            'description': '11g自适应游标共享，同一SQL根据绑定变量值选择不同计划',
+            'impact': '可能导致V$SQL中VERSION_COUNT过高和cursor: pin S wait on X',
+            'parameter': '_optimizer_adaptive_cursor_sharing=FALSE 可禁用',
+        },
+        {
+            'feature': 'Deferred Segment Creation',
+            'description': '11.2延迟段创建，CREATE TABLE不立即分配空间',
+            'impact': '首次INSERT可能慢，大批量建表后exp/imp可能遗漏空表',
+            'parameter': 'DEFERRED_SEGMENT_CREATION=FALSE 禁用',
+        },
+    ],
+    '12': [
+        {
+            'feature': 'Adaptive Plans',
+            'description': '12c自适应执行计划，运行时可从NL切换到Hash Join',
+            'impact': '12.1有多个bug导致性能退化，12.1建议OPTIMIZER_ADAPTIVE_FEATURES=FALSE',
+            'parameter': '12.2+拆分为OPTIMIZER_ADAPTIVE_PLANS和OPTIMIZER_ADAPTIVE_STATISTICS',
+        },
+        {
+            'feature': 'In-Memory Column Store',
+            'description': '12c内存列存储，适合分析型查询',
+            'impact': '需要额外SGA内存(INMEMORY_SIZE)，不影响DML性能',
+            'parameter': 'INMEMORY_SIZE, INMEMORY_QUERY, ALTER TABLE ... INMEMORY',
+        },
+        {
+            'feature': 'Temporal Validity',
+            'description': '12c行级时间有效性和Flashback Archive增强',
+            'impact': '对undo要求更高',
+        },
+        {
+            'feature': 'Fetch First N Rows',
+            'description': '12c原生TOP-N语法(FETCH FIRST N ROWS ONLY)',
+            'impact': '替代ROWNUM分页写法，优化器可直接优化',
+        },
+    ],
+    '19': [
+        {
+            'feature': 'Automatic Indexing',
+            'description': '19c自动索引，Oracle自动识别和创建索引',
+            'impact': '可能创建大量不必要索引，消耗空间',
+            'parameter': 'DBMS_AUTO_INDEX.CONFIGURE(\'AUTO_INDEX_MODE\', \'IMPLEMENT\')',
+            'diagnosis': '检查DBA_AUTO_INDEX_CONFIG和报告',
+        },
+        {
+            'feature': 'SQL Quarantine',
+            'description': '19c SQL隔离，自动阻止消耗过多资源的SQL',
+            'impact': '配合Resource Manager使用',
+        },
+        {
+            'feature': 'Real-Time Statistics',
+            'description': '19c实时统计信息收集，DML时自动更新统计信息',
+            'impact': '减少统计信息过期导致的计划退化',
+            'parameter': '默认开启，_optimizer_gather_stats_on_conventional_dml',
+        },
+        {
+            'feature': 'Hybrid Partitioned Tables',
+            'description': '19c混合分区表，部分分区可在外部文件',
+            'impact': '归档场景有用',
+        },
+    ],
+    '21': [
+        {
+            'feature': 'Blockchain Tables',
+            'description': '21c区块链表，行只能插入不能修改删除',
+            'impact': '审计场景使用',
+        },
+        {
+            'feature': 'In-Memory Enhancements',
+            'description': '21c IM列存增强，自动In-Memory和IM Join Groups',
+            'impact': '分析型查询性能提升',
+        },
+    ],
+}
+
+
+def get_parameter_recommendations(problems: list, parsed_data: dict) -> list:
+    """Based on identified problems, return relevant Oracle parameter tuning suggestions."""
+    recommendations = []
+    problem_keywords = set()
+    for p in problems:
+        title = (p.get('title', '') + ' ' + p.get('evidence', '')).lower()
+        problem_keywords.add(title)
+        metric = p.get('metric_name', '')
+        if metric:
+            problem_keywords.add(metric)
+
+    combined = ' '.join(problem_keywords)
+    for param_name, info in PARAMETER_RECOMMENDATIONS.items():
+        triggers = info.get('trigger_when', [])
+        if not triggers:
+            continue
+        matched = False
+        for trigger in triggers:
+            trigger_lower = trigger.lower()
+            # Check if any problem matches this trigger
+            for kw in problem_keywords:
+                if trigger_lower in kw or any(t in kw for t in trigger_lower.split()):
+                    matched = True
+                    break
+            if matched:
+                break
+        if matched:
+            recommendations.append({
+                'parameter': param_name,
+                'description': info.get('description', ''),
+                'recommendation': info.get('recommendation', ''),
+                'formula': info.get('formula', ''),
+                'notes': info.get('notes', ''),
+                'trigger': triggers,
+            })
+
+    return recommendations
+
+
+def get_version_specific_notes(db_version: str) -> list:
+    """Return version-specific diagnostic notes for the given Oracle version."""
+    if not db_version:
+        return []
+    notes = []
+    for version_prefix, items in VERSION_SPECIFIC_KNOWLEDGE.items():
+        if db_version.startswith(version_prefix):
+            notes.extend(items)
+    return notes
+
+
+def compute_composite_health_score(problems: list, correlations: list, deviations: list) -> int:
+    """Compute a 0-100 composite health score (100 = perfectly healthy).
+
+    Scoring weights:
+      - Each problem deducts points based on severity.
+      - Correlations (cross-dimension root causes) add extra penalty.
+      - Baseline deviations add moderate penalty.
+    The score is clamped to [0, 100].
+    """
+    score = 100.0
+
+    # Severity weights for problems
+    severity_penalty = {
+        'critical': 12,
+        'high': 8,
+        'serious': 8,
+        'medium': 4,
+        'warning': 4,
+        'low': 2,
+    }
+
+    for p in (problems or []):
+        sev = p.get('severity', p.get('health_level', 'medium')).lower()
+        score -= severity_penalty.get(sev, 4)
+
+    # Correlation findings indicate deeper systemic issues
+    for c in (correlations or []):
+        score -= 3
+
+    # Baseline deviations (less severe individually)
+    for d in (deviations or []):
+        sev = d.get('severity', 'medium').lower()
+        score -= severity_penalty.get(sev, 2) * 0.5
+
+    return max(0, min(100, int(round(score))))
+
+
+# ---------------------------------------------------------------------------
 # WAIT EVENT CLASSIFICATION (Oracle Wait Class Knowledge Base)
 # ---------------------------------------------------------------------------
 
@@ -1022,6 +1370,7 @@ class AWRParser:
             'undo_stats': self._extract_undo_stats(soup),
             'wait_class_summary': self._extract_wait_class_summary(soup),
             'temp_stats': self._extract_temp_stats(soup),
+            'time_model': self._extract_time_model(soup),
         }
         # Enrich top_events with wait_class classification
         for evt in result.get('top_events', []):
@@ -1564,6 +1913,40 @@ class AWRParser:
                 if result.get('sorts_disk', 0) > 0 and result.get('sorts_memory', 0) > 0:
                     total_sorts = result['sorts_disk'] + result['sorts_memory']
                     result['disk_sort_pct'] = (result['sorts_disk'] / total_sorts) * 100
+        except Exception:
+            pass
+        return result
+
+    def _extract_time_model(self, soup) -> dict:
+        """Extract Time Model Statistics (DB Time breakdown by component)."""
+        result = {}
+        try:
+            table = self._find_table_after(soup, r'Time\s+Model\s+Statistics')
+            rows = self._parse_table(table)
+            for row in rows:
+                stat_name = row.get('Statistic Name', row.get('Stat Name', row.get('name', '')))
+                time_s = self._safe_float(row.get('Time (s)', row.get('time_s', row.get('value', 0))))
+                pct = self._safe_float(row.get('% of DB Time', row.get('pct_db_time', 0)))
+                if stat_name:
+                    safe_key = re.sub(r'[^a-zA-Z0-9]', '_', stat_name.lower()).strip('_')
+                    result[safe_key] = {'name': stat_name, 'time_seconds': time_s, 'pct_db_time': pct}
+            # Also try text-based extraction for common time model metrics
+            if not result:
+                text = soup.get_text()
+                tm_patterns = {
+                    'DB CPU': r'DB\s+CPU[:\s]*([\d\.]+)',
+                    'sql execute elapsed time': r'sql\s+execute\s+elapsed\s+time[:\s]*([\d\.]+)',
+                    'PL/SQL execution elapsed time': r'PL/SQL\s+execution\s+elapsed\s+time[:\s]*([\d\.]+)',
+                    'parse time elapsed': r'parse\s+time\s+elapsed[:\s]*([\d\.]+)',
+                    'hard parse elapsed time': r'hard\s+parse\s+elapsed\s+time[:\s]*([\d\.]+)',
+                    'connection management call elapsed time': r'connection\s+management\s+call\s+elapsed[:\s]*([\d\.]+)',
+                    'sequence load elapsed time': r'sequence\s+load\s+elapsed[:\s]*([\d\.]+)',
+                }
+                for name, pat in tm_patterns.items():
+                    m = re.search(pat, text, re.IGNORECASE)
+                    if m:
+                        safe_key = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()).strip('_')
+                        result[safe_key] = {'name': name, 'time_seconds': self._safe_float(m.group(1)), 'pct_db_time': 0}
         except Exception:
             pass
         return result
@@ -2620,29 +3003,92 @@ class BaselineComparer:
         return {'deviation_pct': round(deviation_pct, 1), 'is_anomaly': bool(is_anomaly)}
 
     def _extract_key_metrics(self, parsed_data: dict) -> dict:
-        """Extract key metrics from parsed data for baseline comparison."""
+        """Extract ALL scoreable metrics from parsed data for baseline comparison.
+        Reuses MetricScorer.score_all() extraction logic to stay in sync."""
         metrics = {}
         try:
+            # Use MetricScorer to extract all metrics, then harvest the scored_metrics
+            scorer = MetricScorer()
+            # We need the scored_metrics dict, not the problems list.
+            # Replicate the extraction by calling score_all and capturing via a wrapper.
+            # Instead, directly compute the same metrics:
             load_profile = parsed_data.get('load_profile', {})
-            if isinstance(load_profile, dict):
-                computed = load_profile.get('computed', {})
-                if computed.get('db_time') and computed.get('db_cpu'):
-                    db_cpu = computed['db_cpu']
-                    if db_cpu > 0:
-                        metrics['db_time_ratio'] = round(computed['db_time'] / db_cpu, 2)
-            parse_stats = parsed_data.get('parse_stats', {}) or {}
-            if parse_stats.get('hard_parse_pct'):
-                metrics['hard_parse_pct'] = parse_stats['hard_parse_pct']
+            computed = load_profile.get('computed', {}) if isinstance(load_profile, dict) else {}
+
+            def _sf(v):
+                try:
+                    return float(v) if v else 0
+                except (ValueError, TypeError):
+                    return 0
+
+            # Load profile derived
+            db_time = _sf(computed.get('db_time'))
+            db_cpu = _sf(computed.get('db_cpu'))
+            if db_cpu > 0:
+                metrics['db_time_ratio'] = round(db_time / db_cpu, 4)
+            hard_parses = _sf(computed.get('hard_parses'))
+            parses = _sf(computed.get('parses'))
+            if parses > 0:
+                metrics['hard_parse_pct'] = round(hard_parses / parses * 100, 2)
+                metrics['hard_parses_per_sec'] = round(hard_parses, 2)
+                metrics['total_parses_per_sec'] = round(parses, 2)
+            if computed.get('redo_size'):
+                metrics['redo_size_per_sec'] = _sf(computed['redo_size'])
+            if computed.get('transactions'):
+                metrics['transactions_per_sec'] = _sf(computed['transactions'])
+            if computed.get('logical_reads'):
+                metrics['logical_reads_per_sec'] = _sf(computed['logical_reads'])
+            if computed.get('physical_reads'):
+                metrics['physical_reads_per_sec'] = _sf(computed['physical_reads'])
+            if computed.get('executes'):
+                metrics['sql_executions_per_sec'] = _sf(computed['executes'])
+
+            # Top events (pct + avg_wait)
             top_events = parsed_data.get('top_events', []) or []
-            for event in top_events[:5]:
-                pct = event.get('pct_db_time', 0)
-                avg_wait = event.get('avg_wait', 0)
-                ename = event.get('event', '')
+            for event in top_events[:10]:
+                pct = _sf(event.get('pct_db_time', 0))
+                avg_wait = _sf(event.get('avg_wait', 0))
+                ename = event.get('event', event.get('name', ''))
                 if ename and pct:
                     safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', ename.lower()).strip('_')
-                    metrics[f'{safe_name}_pct_db_time'] = float(pct)
+                    metrics[f'{safe_name}_pct_db_time'] = pct
                     if avg_wait:
-                        metrics[f'{safe_name}_avg_wait'] = float(avg_wait)
+                        metrics[f'{safe_name}_avg_wait'] = avg_wait
+
+            # Instance efficiency
+            instance_eff = parsed_data.get('instance_efficiency', {})
+            eff_map = {
+                'buffer': 'buffer_cache_hit_ratio', 'library': 'library_cache_hit_ratio',
+                'soft parse': 'soft_parse_pct', 'execute to parse': 'execute_to_parse_pct',
+                'latch hit': 'latch_hit_pct', 'memory sort': 'in_memory_sort_pct',
+                'in-memory sort': 'in_memory_sort_pct',
+                'parse cpu': 'parse_cpu_to_elapsed_pct',
+            }
+            if isinstance(instance_eff, dict):
+                for name, val in instance_eff.items():
+                    fval = _sf(val)
+                    if fval > 0:
+                        for keyword, metric_key in eff_map.items():
+                            if keyword in name.lower():
+                                metrics[metric_key] = fval
+                                break
+            elif isinstance(instance_eff, list):
+                for item in instance_eff:
+                    name = (item.get('name', item.get('metric', '')) or '').lower()
+                    fval = _sf(item.get('value', item.get('pct', 0)))
+                    if fval > 0:
+                        for keyword, metric_key in eff_map.items():
+                            if keyword in name:
+                                metrics[metric_key] = fval
+                                break
+
+            # Parse stats supplementary
+            parse_stats = parsed_data.get('parse_stats', {}) or {}
+            if isinstance(parse_stats, dict):
+                for key in ('execute_to_parse_pct', 'parse_cpu_to_elapsed_pct'):
+                    if parse_stats.get(key) and key not in metrics:
+                        metrics[key] = _sf(parse_stats[key])
+
         except Exception:
             pass
         return metrics
@@ -2661,13 +3107,18 @@ class LLMIntegration:
         self.api_url = api_url
         self.model = model
 
-    def enhance_analysis(self, parsed_data: dict, problems: list, correlations: list) -> dict:
+    def enhance_analysis(self, parsed_data: dict, problems: list, correlations: list,
+                         anti_patterns=None, wait_class_summary=None,
+                         param_recommendations=None) -> dict:
         """Send structured data to LLM for deep analysis.
         Returns dict with: summary, problems, learned_patterns, raw_response"""
         if self.provider == 'none' or not self.api_key:
             return None
         try:
-            prompt = self._build_prompt(parsed_data, problems, correlations)
+            prompt = self._build_prompt(parsed_data, problems, correlations,
+                                        anti_patterns=anti_patterns,
+                                        wait_class_summary=wait_class_summary,
+                                        param_recommendations=param_recommendations)
             response_text = self._call_api(prompt)
             result = self._parse_llm_response(response_text)
             result['raw_response'] = response_text
@@ -2675,44 +3126,140 @@ class LLMIntegration:
         except Exception as e:
             return {'error': str(e), 'summary': '', 'problems': [], 'learned_patterns': []}
 
-    def _build_prompt(self, parsed_data: dict, problems: list, correlations: list) -> str:
-        """Build structured prompt for LLM."""
+    def _build_prompt(self, parsed_data: dict, problems: list, correlations: list,
+                      anti_patterns=None, wait_class_summary=None,
+                      param_recommendations=None) -> str:
+        """Build structured prompt for LLM with comprehensive AWR context."""
         db_info = parsed_data.get('db_info', {}) or {}
         snap_info = parsed_data.get('snap_info', {}) or {}
         load_profile = parsed_data.get('load_profile', {})
-        if isinstance(load_profile, dict):
-            computed = load_profile.get('computed', {})
-        else:
-            computed = {}
+        computed = load_profile.get('computed', {}) if isinstance(load_profile, dict) else {}
 
-        prompt_parts = []
-        prompt_parts.append("\u4f60\u662f\u4e00\u4e2aOracle DBA\u4e13\u5bb6\uff0c\u8bf7\u5206\u6790\u4ee5\u4e0bAWR\u62a5\u544a\u6570\u636e\u5e76\u7ed9\u51fa\u8bca\u65ad\u5efa\u8bae\u3002")
-        prompt_parts.append("")
-        prompt_parts.append(f"\u6570\u636e\u5e93\u4fe1\u606f: DB Name={db_info.get('db_name', 'N/A')}, "
-                           f"Instance={db_info.get('instance_name', 'N/A')}, "
-                           f"Version={db_info.get('db_version', 'N/A')}, "
-                           f"Host={db_info.get('host_name', 'N/A')}")
-        prompt_parts.append(f"\u5feb\u7167\u4fe1\u606f: Begin={snap_info.get('begin_id', 'N/A')}, "
-                           f"End={snap_info.get('end_id', 'N/A')}, "
-                           f"Duration={snap_info.get('duration', 'N/A')}")
-        prompt_parts.append("")
-        prompt_parts.append("\u5173\u952e\u8d1f\u8f7d\u6307\u6807:")
+        p = []  # prompt lines
+        p.append("你是一个Oracle DBA专家，请分析以下AWR报告数据并给出诊断建议。")
+        p.append("")
+
+        # === Section 1: DB Info ===
+        p.append(f"数据库信息: DB Name={db_info.get('db_name', 'N/A')}, "
+                 f"Instance={db_info.get('instance_name', 'N/A')}, "
+                 f"Version={db_info.get('db_version', 'N/A')}, "
+                 f"Host={db_info.get('host_name', 'N/A')}")
+        p.append(f"快照: Begin={snap_info.get('begin_id', 'N/A')}, "
+                 f"End={snap_info.get('end_id', 'N/A')}, "
+                 f"Elapsed={snap_info.get('elapsed_seconds', 'N/A')}s")
+        p.append("")
+
+        # === Section 2: Load Profile ===
+        p.append("关键负载指标(Per Second):")
         for k, v in computed.items():
-            prompt_parts.append(f"  - {k}: {v}")
-        prompt_parts.append("")
-        prompt_parts.append("\u53d1\u73b0\u7684\u95ee\u9898:")
-        for i, p in enumerate(problems[:10], 1):
-            prompt_parts.append(f"  {i}. [{p.get('level', 'warning')}] {p.get('title', 'N/A')} - {p.get('evidence', '')}")
-        prompt_parts.append("")
-        prompt_parts.append("\u5173\u8054\u5206\u6790:")
-        for i, c in enumerate(correlations[:5], 1):
-            prompt_parts.append(f"  {i}. {c.get('title', 'N/A')}: {c.get('root_cause', '')}")
-        prompt_parts.append("")
-        prompt_parts.append("\u8bf7\u4ee5\u4e0b\u9762\u7684JSON\u683c\u5f0f\u8f93\u51fa\u5206\u6790\u7ed3\u679c\uff0c\u4e0d\u8981\u5305\u542b\u4efb\u4f55markdown\u6807\u8bb0:")
-        prompt_parts.append('{"summary": "\u603b\u4f53\u5206\u6790\u6458\u8981", "problems": [{"title": "", "severity": "", "root_cause": "", "evidence": [], "suggestion": []}], "learned_patterns": [{"pattern_name": "", "conditions": [{"metric": "", "op": "", "value": 0}], "solution": ""}]}')
-        prompt_parts.append("")
-        prompt_parts.append("\u6ce8\u610f: \u53ea\u8f93\u51fa\u5408\u6cd5\u7684JSON\uff0c\u4e0d\u8981\u7528```\u5305\u88f9\u3002")
-        return "\n".join(prompt_parts)
+            p.append(f"  {k}: {v}")
+        p.append("")
+
+        # === Section 3: Top Wait Events ===
+        top_events = parsed_data.get('top_events', []) or []
+        if top_events:
+            p.append("Top等待事件:")
+            for i, evt in enumerate(top_events[:10], 1):
+                ename = evt.get('event', evt.get('name', 'N/A'))
+                pct = evt.get('pct_db_time', 0)
+                avg = evt.get('avg_wait', 0)
+                wclass = evt.get('wait_class', '')
+                p.append(f"  {i}. {ename} | %DB Time={pct} | Avg Wait={avg}ms | Class={wclass}")
+            p.append("")
+
+        # === Section 4: Wait Class Summary ===
+        if wait_class_summary:
+            p.append("Wait Class汇总:")
+            for wclass, total_pct in sorted(wait_class_summary.items(), key=lambda x: -x[1]):
+                if total_pct > 0.1:
+                    p.append(f"  {wclass}: {total_pct:.1f}% DB Time")
+            p.append("")
+
+        # === Section 5: Top SQL ===
+        top_sql = parsed_data.get('top_sql', {})
+        if isinstance(top_sql, dict):
+            for section_name in ['SQL ordered by Elapsed Time', 'SQL ordered by CPU Time',
+                                 'SQL ordered by Gets']:
+                sql_list = top_sql.get(section_name, [])
+                if sql_list:
+                    p.append(f"{section_name} (Top 5):")
+                    for i, sql in enumerate(sql_list[:5], 1):
+                        sql_id = sql.get('sql_id', sql.get('SQL Id', 'N/A'))
+                        elapsed = sql.get('Elapsed Time (s)', sql.get('elapsed_time', ''))
+                        cpu = sql.get('CPU Time (s)', sql.get('cpu_time', ''))
+                        gets = sql.get('Buffer Gets', sql.get('buffer_gets', ''))
+                        execs = sql.get('Executions', sql.get('executions', ''))
+                        text = (sql.get('sql_text', sql.get('SQL Text', '')) or '')[:80]
+                        p.append(f"  {i}. SQL_ID={sql_id} Elapsed={elapsed}s CPU={cpu}s "
+                                 f"Gets={gets} Execs={execs}")
+                        if text:
+                            p.append(f"     SQL: {text}...")
+                    p.append("")
+
+        # === Section 6: Instance Efficiency ===
+        instance_eff = parsed_data.get('instance_efficiency', {})
+        if instance_eff:
+            p.append("实例效率:")
+            if isinstance(instance_eff, dict):
+                for name, val in instance_eff.items():
+                    p.append(f"  {name}: {val}%")
+            elif isinstance(instance_eff, list):
+                for item in instance_eff:
+                    p.append(f"  {item.get('name', item.get('metric', ''))}: {item.get('value', '')}%")
+            p.append("")
+
+        # === Section 7: Time Model ===
+        time_model = parsed_data.get('time_model', {})
+        if time_model:
+            p.append("Time Model (DB Time分解):")
+            for key, tm in time_model.items():
+                if isinstance(tm, dict) and tm.get('time_seconds', 0) > 0:
+                    p.append(f"  {tm.get('name', key)}: {tm['time_seconds']}s "
+                             f"({tm.get('pct_db_time', 0)}% DB Time)")
+            p.append("")
+
+        # === Section 8: Identified Problems ===
+        p.append(f"发现的问题({len(problems)}个):")
+        for i, prob in enumerate(problems[:15], 1):
+            level = prob.get('health_level', prob.get('severity', 'warning'))
+            title = prob.get('title', 'N/A')
+            evidence = prob.get('evidence', '')
+            p.append(f"  {i}. [{level}] {title}")
+            if evidence:
+                p.append(f"     证据: {evidence[:120]}")
+        p.append("")
+
+        # === Section 9: Correlation Analysis ===
+        if correlations:
+            p.append(f"关联分析({len(correlations)}条):")
+            for i, c in enumerate(correlations[:8], 1):
+                p.append(f"  {i}. {c.get('title', 'N/A')}: {c.get('root_cause', '')}")
+            p.append("")
+
+        # === Section 10: SQL Anti-Patterns ===
+        if anti_patterns:
+            p.append(f"SQL反模式({len(anti_patterns)}个):")
+            for i, ap in enumerate(anti_patterns[:5], 1):
+                p.append(f"  {i}. [{ap.get('severity', '')}] {ap.get('anti_pattern', '')}: "
+                         f"{ap.get('description', '')}")
+            p.append("")
+
+        # === Section 11: Parameter Recommendations ===
+        if param_recommendations:
+            p.append(f"建议调整的参数({len(param_recommendations)}个):")
+            for rec in param_recommendations[:5]:
+                p.append(f"  {rec['parameter']}: {rec['recommendation']}")
+            p.append("")
+
+        # === Output Format ===
+        p.append("请以下面的JSON格式输出分析结果，不要包含任何markdown标记:")
+        p.append('{"summary": "总体分析摘要", '
+                 '"problems": [{"title": "", "severity": "", "root_cause": "", "evidence": [], "suggestion": []}], '
+                 '"learned_patterns": [{"pattern_name": "", "conditions": [{"metric": "", "op": "", "value": 0}], "solution": ""}], '
+                 '"parameter_suggestions": [{"parameter": "", "current_issue": "", "recommended_value": "", "reason": ""}]}')
+        p.append("")
+        p.append("注意: 只输出合法的JSON，不要用```包裹。")
+        return "\n".join(p)
 
     def _parse_llm_response(self, response_text: str) -> dict:
         """Parse LLM response, trying to extract JSON."""

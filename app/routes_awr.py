@@ -6,7 +6,9 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from .models import db, AWRReport, AWRMetric, AWRProblem, AWRAnalysisResult, KnowledgeRule, AuditLog, SystemSetting
 from .awr_engine import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer,
-                         LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event)
+                         LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event,
+                         get_parameter_recommendations, get_version_specific_notes,
+                         compute_composite_health_score)
 
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
@@ -364,6 +366,93 @@ def _store_metrics(report_id, parsed):
             )
             db.session.add(metric)
 
+    # --- New sections added in Batch 3 ---
+
+    # advisories section
+    _store_list_or_dict(report_id, 'advisory', parsed.get('advisories', []))
+
+    # enqueue_activity section
+    _store_list_or_dict(report_id, 'enqueue', parsed.get('enqueue_activity', []))
+
+    # latch_detail section
+    _store_list_or_dict(report_id, 'latch', parsed.get('latch_detail', []))
+
+    # wait_histogram section
+    _store_list_or_dict(report_id, 'wait_histogram', parsed.get('wait_histogram', []))
+
+    # undo_stats section
+    _store_list_or_dict(report_id, 'undo', parsed.get('undo_stats', []))
+
+    # wait_class_summary section
+    wait_class_summary = parsed.get('wait_class_summary', [])
+    if isinstance(wait_class_summary, list):
+        for row in wait_class_summary:
+            metric = AWRMetric(
+                report_id=report_id,
+                metric_type='wait_class',
+                metric_name=row.get('wait_class', row.get('name', '')),
+                metric_value=row.get('pct_db_time', row.get('value')),
+                metric_unit='%DB Time',
+                extra_json=json.dumps(row, ensure_ascii=False),
+            )
+            db.session.add(metric)
+
+    # temp_stats section
+    _store_list_or_dict(report_id, 'temp', parsed.get('temp_stats', []))
+
+    # time_model section
+    time_model = parsed.get('time_model', {})
+    if isinstance(time_model, dict):
+        for key, tm in time_model.items():
+            if isinstance(tm, dict):
+                metric = AWRMetric(
+                    report_id=report_id,
+                    metric_type='time_model',
+                    metric_name=tm.get('name', key),
+                    metric_value=tm.get('time_seconds'),
+                    metric_unit='seconds',
+                    extra_json=json.dumps(tm, ensure_ascii=False),
+                )
+                db.session.add(metric)
+    elif isinstance(time_model, list):
+        for row in time_model:
+            metric = AWRMetric(
+                report_id=report_id,
+                metric_type='time_model',
+                metric_name=row.get('name', row.get('stat_name', '')),
+                metric_value=row.get('time_seconds', row.get('value')),
+                metric_unit='seconds',
+                extra_json=json.dumps(row, ensure_ascii=False),
+            )
+            db.session.add(metric)
+
+
+def _store_list_or_dict(report_id, metric_type, data):
+    """Generic helper to store list-or-dict parsed sections as AWRMetric rows."""
+    if isinstance(data, list):
+        for row in data:
+            name = row.get('name', row.get('stat_name', row.get('latch_name',
+                   row.get('event', row.get('advisory', '')))))
+            val = row.get('value', row.get('gets', row.get('waits')))
+            metric = AWRMetric(
+                report_id=report_id,
+                metric_type=metric_type,
+                metric_name=name or metric_type,
+                metric_value=float(val) if isinstance(val, (int, float)) else None,
+                extra_json=json.dumps(row, ensure_ascii=False),
+            )
+            db.session.add(metric)
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            metric = AWRMetric(
+                report_id=report_id,
+                metric_type=metric_type,
+                metric_name=key,
+                metric_value=float(value) if isinstance(value, (int, float)) else None,
+                extra_json=json.dumps({'name': key, 'value': value}, ensure_ascii=False),
+            )
+            db.session.add(metric)
+
 
 def _reconstruct_parsed_data(report):
     """Reconstruct parsed_data dict from stored AWRMetric records, or re-parse from raw_html."""
@@ -398,6 +487,14 @@ def _reconstruct_parsed_data(report):
         'redo_stats': [],
         'parse_stats': [],
         'segment_stats': [],
+        'advisories': [],
+        'enqueue_activity': [],
+        'latch_detail': [],
+        'wait_histogram': [],
+        'undo_stats': [],
+        'wait_class_summary': [],
+        'temp_stats': [],
+        'time_model': {},
     }
 
     for m in metrics:
@@ -444,6 +541,38 @@ def _reconstruct_parsed_data(report):
             parsed_data['segment_stats'].append(extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
             })
+        elif m.metric_type == 'advisory':
+            parsed_data['advisories'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'enqueue':
+            parsed_data['enqueue_activity'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'latch':
+            parsed_data['latch_detail'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'wait_histogram':
+            parsed_data['wait_histogram'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'undo':
+            parsed_data['undo_stats'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'wait_class':
+            parsed_data['wait_class_summary'].append(extra if extra else {
+                'wait_class': m.metric_name, 'pct_db_time': m.metric_value
+            })
+        elif m.metric_type == 'temp':
+            parsed_data['temp_stats'].append(extra if extra else {
+                'name': m.metric_name, 'value': m.metric_value
+            })
+        elif m.metric_type == 'time_model':
+            parsed_data['time_model'][m.metric_name] = extra if extra else {
+                'name': m.metric_name, 'time_seconds': m.metric_value
+            }
 
     # Sort ordered items
     parsed_data['top_events'].sort(key=lambda x: x.get('pct_db_time', x.get('pct', 0)) or 0, reverse=True)
@@ -535,6 +664,11 @@ def analyze_report(report_id):
                 'suggestion': f'重点关注 {wclass} 类下的各具体等待事件',
             })
 
+    # Step 3.7: Parameter recommendations and version notes
+    param_recommendations = get_parameter_recommendations(problems, parsed_data)
+    version_notes = get_version_specific_notes(
+        parsed_data.get('db_info', {}).get('db_version', ''))
+
     # Step 4: LLM enhancement (optional)
     use_llm = request.form.get('use_llm') == 'on'
     llm_result = None
@@ -546,10 +680,15 @@ def analyze_report(report_id):
         llm_model = SystemSetting.get('llm_model', '')
         if llm_provider != 'none' and llm_key:
             llm = LLMIntegration(llm_provider, llm_key, llm_url, llm_model)
-            llm_result = llm.enhance_analysis(parsed_data, problems, correlations)
+            llm_result = llm.enhance_analysis(
+                parsed_data, problems, correlations,
+                anti_patterns=sql_anti_patterns,
+                wait_class_summary=wait_class_totals,
+                param_recommendations=param_recommendations,
+            )
             llm_patterns = llm_result.get('learned_patterns', []) if isinstance(llm_result, dict) else []
 
-    # Step 5: Determine overall health level
+    # Step 5: Determine overall health level and composite score
     all_problems = problems + deviations
     health_level = 'healthy'
     for p in all_problems:
@@ -560,6 +699,8 @@ def analyze_report(report_id):
         elif p_level in ('warning', 'medium'):
             health_level = 'warning'
 
+    composite_score = compute_composite_health_score(problems, correlations, deviations)
+
     # Step 6: Build summary string
     db_info = parsed_data.get('db_info', {})
     snap_info = parsed_data.get('snap_info', {})
@@ -568,23 +709,32 @@ def analyze_report(report_id):
         f"版本: {db_info.get('db_version', 'N/A')}",
         f"快照: {snap_info.get('begin_id', 'N/A')} - {snap_info.get('end_id', 'N/A')}",
         f"持续时间: {snap_info.get('elapsed_seconds', 'N/A')}秒",
-        f"健康等级: {health_level}",
+        f"健康评分: {composite_score}/100 ({health_level})",
         f"发现问题: {len(all_problems)}个",
     ]
     if sql_anti_patterns:
         summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
+    if param_recommendations:
+        summary_parts.append(f"参数建议: {len(param_recommendations)}个")
     if llm_result:
         summary_parts.append("(含LLM增强分析)")
     summary = ' | '.join(summary_parts)
 
     # Step 7: Create AWRAnalysisResult
+    # Merge correlations with param recommendations and version notes into recommendations
+    full_recommendations = {
+        'correlations': correlations,
+        'parameter_recommendations': param_recommendations,
+        'version_notes': version_notes,
+        'composite_score': composite_score,
+    }
     analysis = AWRAnalysisResult(
         report_id=report.id,
         analysis_type='combined' if llm_result else 'rule',
         health_level=health_level,
         summary=summary,
         problems_json=json.dumps(all_problems, ensure_ascii=False, default=str),
-        recommendations_json=json.dumps(correlations, ensure_ascii=False, default=str),
+        recommendations_json=json.dumps(full_recommendations, ensure_ascii=False, default=str),
         correlation_findings_json=json.dumps(correlations, ensure_ascii=False, default=str),
         llm_provider=SystemSetting.get('llm_provider') if llm_result else None,
         llm_raw_response=json.dumps(llm_result, ensure_ascii=False, default=str) if llm_result else None,
