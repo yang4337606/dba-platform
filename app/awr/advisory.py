@@ -438,16 +438,53 @@ class WaitHistogramAnalyzer:
     high-latency spikes.
     """
 
-    # Ordered bucket labels and their upper-bound latency in ms
-    _BUCKETS = [
+    # Ordered bucket labels and their upper-bound latency in ms.
+    # Real AWR reports use varying formats (e.g. '<1ms', '< 1ms', '<8us',
+    # '<128us', '<=1s', '>1s').  We detect bucket columns dynamically at
+    # analysis time rather than relying on exact label strings.
+    _BUCKETS_FALLBACK = [
         ('< 1ms', 1),
         ('< 2ms', 2),
         ('< 4ms', 4),
         ('< 8ms', 8),
         ('< 16ms', 16),
         ('< 32ms', 32),
-        ('>= 32ms', 64),  # use 64ms as approximate representative
+        ('>= 32ms', 64),
     ]
+
+    @staticmethod
+    def _detect_bucket_columns(row: dict) -> list[tuple[str, float]]:
+        """Detect time-bucket columns from a histogram row and return
+        (label, upper_bound_ms) pairs sorted by upper bound.
+
+        Handles labels like '<1ms', '<8us', '<=1s', '>1s', '>=512us', etc.
+        """
+        import re
+        buckets: list[tuple[str, float]] = []
+        skip_keys = {'Event', 'event', 'name', 'Total Waits', 'Waits',
+                      'wait_count', '_section', 'wait_class', 'Wait Class'}
+        for key in row.keys():
+            if key in skip_keys or not key:
+                continue
+            # Try to parse a time label
+            m = re.match(
+                r'^([<>=!]+)\s*([\d.]+)\s*(us|ms|s)\s*$', key, re.IGNORECASE
+            )
+            if not m:
+                continue
+            op, val_s, unit = m.group(1), m.group(2), m.group(3).lower()
+            val = float(val_s)
+            # Normalize to milliseconds
+            if unit == 'us':
+                val_ms = val / 1000.0
+            elif unit == 's':
+                val_ms = val * 1000.0
+            else:
+                val_ms = val
+            # For '>=' or '>' operators, use the value as-is as approximate upper bound
+            buckets.append((key, val_ms))
+        buckets.sort(key=lambda b: b[1])
+        return buckets
 
     def analyze(self, wait_histogram: list[dict]) -> list[dict]:
         """Analyze wait histogram rows and return latency findings.
@@ -463,40 +500,57 @@ class WaitHistogramAnalyzer:
         if not wait_histogram:
             return []
 
+        # Detect bucket columns from the first row
+        buckets = self._detect_bucket_columns(wait_histogram[0])
+        if not buckets:
+            # Fallback to hardcoded labels
+            buckets = self._BUCKETS_FALLBACK
+
         findings = []
 
         for row in wait_histogram:
-            event = row.get('Event', 'unknown')
+            event = row.get('Event', row.get('event', row.get('name', 'unknown')))
 
-            # Parse bucket counts
-            counts = []
-            for label, _ in self._BUCKETS:
+            # Parse bucket values (may be counts or percentages depending on AWR version)
+            values: list[float] = []
+            for label, _ in buckets:
                 try:
-                    counts.append(int(row.get(label, 0)))
+                    v = row.get(label, '')
+                    values.append(float(v) if v != '' else 0.0)
                 except (ValueError, TypeError):
-                    counts.append(0)
+                    values.append(0.0)
 
-            total = sum(counts)
-            if total == 0:
+            total_val = sum(values)
+            if total_val <= 0:
                 continue
 
-            # Calculate percentages per bucket
-            pcts = [c / total * 100 for c in counts]
+            # Determine total_waits: use explicit field if available, else sum of values
+            explicit_total = row.get('Total Waits', row.get('Waits', None))
+            if explicit_total is not None:
+                try:
+                    total_waits = int(float(explicit_total))
+                except (ValueError, TypeError):
+                    total_waits = int(total_val)
+            else:
+                total_waits = int(total_val)
 
-            # Estimate P95 and P99 buckets
-            p95_bucket = self._percentile_bucket(counts, total, 95)
-            p99_bucket = self._percentile_bucket(counts, total, 99)
+            # Normalize to percentages
+            pcts = [v / total_val * 100 for v in values]
+
+            # Estimate P95 and P99 bucket indices
+            p95_idx = self._percentile_bucket_pcts(pcts, 95)
+            p99_idx = self._percentile_bucket_pcts(pcts, 99)
 
             # Detect patterns
-            pattern, finding_text, severity = self._detect_pattern(
-                event, pcts, p99_bucket,
+            pattern, finding_text, severity = self._detect_pattern_dynamic(
+                event, pcts, p99_idx, buckets,
             )
 
             findings.append({
                 'event': event,
-                'total_waits': total,
-                'p95_bucket': self._BUCKETS[p95_bucket][0],
-                'p99_bucket': self._BUCKETS[p99_bucket][0],
+                'total_waits': total_waits,
+                'p95_bucket': buckets[p95_idx][0] if p95_idx < len(buckets) else '?',
+                'p99_bucket': buckets[p99_idx][0] if p99_idx < len(buckets) else '?',
                 'pattern': pattern,
                 'finding': finding_text,
                 'severity': severity,
@@ -504,68 +558,80 @@ class WaitHistogramAnalyzer:
 
         return findings
 
-    def _percentile_bucket(self, counts: list[int], total: int, pct: float) -> int:
-        """Return the bucket index where the cumulative count reaches *pct*%."""
-        target = total * pct / 100.0
-        cumulative = 0
-        for i, c in enumerate(counts):
-            cumulative += c
-            if cumulative >= target:
+    def _percentile_bucket_pcts(self, pcts: list[float], target_pct: float) -> int:
+        """Return the bucket index where cumulative percentage reaches *target_pct*%."""
+        cumulative = 0.0
+        for i, p in enumerate(pcts):
+            cumulative += p
+            if cumulative >= target_pct:
                 return i
-        return len(counts) - 1
+        return len(pcts) - 1
 
-    def _detect_pattern(
+    def _detect_pattern_dynamic(
         self, event: str, pcts: list[float], p99_idx: int,
+        buckets: list[tuple[str, float]],
     ) -> tuple[str, str, str]:
-        """Detect distribution pattern and return (pattern, finding, severity).
+        """Detect distribution pattern with dynamic bucket definitions.
 
         Returns:
             Tuple of (pattern_name, finding_text, severity).
         """
-        # Index constants
-        IDX_LT1 = 0
-        IDX_GE32 = 6
-        IDX_GE16 = 5  # '< 32ms' bucket index; >= 16ms starts at index 5
+        if not pcts or not buckets:
+            return ('normal', f'{event} 延迟分布正常', 'low')
 
-        # Long tail detection: >= 32ms bucket > 5%
-        if pcts[IDX_GE32] > 5:
+        n = len(pcts)
+        last_idx = n - 1
+
+        # Determine "high latency" threshold index (buckets >= 16ms equivalent)
+        high_start_idx = last_idx
+        for i, (_, upper_ms) in enumerate(buckets):
+            if upper_ms >= 16:
+                high_start_idx = i
+                break
+
+        # Sum of high-latency bucket percentages
+        high_pct = sum(pcts[high_start_idx:]) if high_start_idx < n else 0
+
+        # Long tail: last bucket > 5%
+        if pcts[last_idx] > 5:
             return (
                 'long_tail',
-                f'长尾延迟: {event} P99 > 32ms, >= 32ms等待占比 {pcts[IDX_GE32]:.1f}%',
+                f'长尾延迟: {event} P99 {buckets[p99_idx][0]}, '
+                f'高延迟等待占比 {pcts[last_idx]:.1f}%',
                 'high',
             )
 
-        # Bimodal detection: < 1ms > 20% AND >= 16ms buckets collectively > 20%
-        high_bucket_pct = pcts[IDX_GE16] + pcts[IDX_GE32]  # >= 16ms region
-        if pcts[IDX_LT1] > 20 and high_bucket_pct > 20:
+        # Bimodal: first bucket > 20% AND high buckets collectively > 20%
+        if pcts[0] > 20 and high_pct > 20:
             return (
                 'bimodal',
                 f'双峰分布: {event} 存在两种不同延迟模式 '
-                f'(< 1ms: {pcts[IDX_LT1]:.1f}%, >= 16ms: {high_bucket_pct:.1f}%)',
+                f'({buckets[0][0]}: {pcts[0]:.1f}%, 高延迟: {high_pct:.1f}%)',
                 'warning',
             )
 
-        # Spike detection: any single bucket > 80%
+        # Spike: any single bucket > 80%
         max_pct = max(pcts)
         max_idx = pcts.index(max_pct)
         if max_pct > 80:
-            if max_idx >= 4:  # >= 16ms bucket region
+            if max_idx >= high_start_idx:
                 return (
                     'high_spike',
                     f'延迟集中在高等待区间: {event} '
-                    f'{self._BUCKETS[max_idx][0]} 占比 {max_pct:.1f}%',
+                    f'{buckets[max_idx][0]} 占比 {max_pct:.1f}%',
                     'high',
                 )
             return (
                 'uniform_low',
-                f'均匀延迟模式: {event} 延迟集中在 {self._BUCKETS[max_idx][0]}',
+                f'均匀延迟模式: {event} 延迟集中在 {buckets[max_idx][0]}',
                 'low',
             )
 
-        # Default: normal distribution
+        # Normal
+        p99_label = buckets[p99_idx][0] if p99_idx < len(buckets) else '?'
         return (
             'normal',
-            f'{event} 延迟分布正常, P99 在 {self._BUCKETS[p99_idx][0]} 范围内',
+            f'{event} 延迟分布正常, P99 在 {p99_label} 范围内',
             'low',
         )
 

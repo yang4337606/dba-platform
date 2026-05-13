@@ -101,7 +101,7 @@
     <table>
       <thead><tr>
       {% if ns.has_raw_rows %}
-        {% for k in ns.raw_keys %}<th style="font-size:11px;">{{ k }}</th>{% endfor %}
+        {% for k in ns.raw_keys %}<th style="font-size:11px;">{{ k if k else _('th_metric') }}</th>{% endfor %}
       {% else %}
         <th>{{ _('th_metric') }}</th><th>{{ _('th_value') }}</th><th>{{ _('th_unit') }}</th>
       {% endif %}
@@ -235,6 +235,7 @@
       'name': _('th_event'),
       'waits': _('th_waits'),
       'Waits': _('th_waits'),
+      'Total Waits': _('th_waits'),
       'wait_count': _('th_waits'),
       'total_wait_time': _('th_total_wait_time'),
       'Total Wait Time': _('th_total_wait_time'),
@@ -244,6 +245,8 @@
       'Wait Class': _('th_wait_class'),
       '%DB time': _('th_pct_db_time'),
       'pct_db_time': _('th_pct_db_time'),
+      '% of Total Waits': _('th_pct_db_time'),
+      '% of Waits': _('th_pct_db_time'),
       '_section': _('th_section')
     } %}
     <table>
