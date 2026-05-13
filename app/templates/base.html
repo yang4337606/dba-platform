@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{{ get_lang() }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}DBA工具平台{% endblock %}</title>
+  <title>{% block title %}{{ _('site_title') }}{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -15,26 +15,26 @@
     <div class="sidebar-header">
       <div class="logo">
         <span class="logo-icon">&#9671;</span>
-        <span class="logo-text">DBA Platform</span>
+        <span class="logo-text">{{ _('login_brand') }}</span>
       </div>
     </div>
     <div class="sidebar-nav">
       <a href="{{ url_for('main.dashboard') }}" class="nav-item {% if request.endpoint == 'main.dashboard' %}active{% endif %}">
-        <span class="nav-icon">&#9632;</span> 控制台
+        <span class="nav-icon">&#9632;</span> {{ _('nav_dashboard') }}
       </a>
       <a href="{{ url_for('awr.list_reports') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('awr.') %}active{% endif %}">
-        <span class="nav-icon">&#9670;</span> AWR分析
+        <span class="nav-icon">&#9670;</span> {{ _('nav_awr_analysis') }}
       </a>
       <a href="{{ url_for('knowledge.list_entries') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('knowledge.') %}active{% endif %}">
-        <span class="nav-icon">&#9733;</span> 知识库
+        <span class="nav-icon">&#9733;</span> {{ _('nav_knowledge') }}
       </a>
       <a href="{{ url_for('projects.list_projects') }}" class="nav-item {% if request.endpoint == 'projects.list_projects' %}active{% endif %}">
-        <span class="nav-icon">&#9783;</span> 项目
+        <span class="nav-icon">&#9783;</span> {{ _('nav_projects') }}
       </a>
       {% if current_user.is_admin %}
       <div class="nav-divider"></div>
       <a href="{{ url_for('admin.index') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('admin.') %}active{% endif %}">
-        <span class="nav-icon">&#9881;</span> 管理后台
+        <span class="nav-icon">&#9881;</span> {{ _('nav_admin') }}
       </a>
       {% endif %}
     </div>
@@ -43,7 +43,11 @@
         <span class="user-badge {{ current_user.role }}">{{ current_user.role }}</span>
         <span class="user-name">{{ current_user.username }}</span>
       </div>
-      <a href="{{ url_for('auth.logout') }}" class="nav-item logout">退出</a>
+      <div class="lang-switch">
+        <a href="/set-lang/zh" class="{% if get_lang() == 'zh' %}active{% endif %}">中文</a>
+        <a href="/set-lang/en" class="{% if get_lang() == 'en' %}active{% endif %}">EN</a>
+      </div>
+      <a href="{{ url_for('auth.logout') }}" class="nav-item logout">{{ _('nav_logout') }}</a>
     </div>
   </nav>
   {% endif %}

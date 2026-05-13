@@ -2,6 +2,7 @@ import json
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from .models import db, KnowledgeRule, AuditLog
+from .i18n import t
 
 kb_bp = Blueprint('knowledge', __name__, url_prefix='/knowledge')
 
@@ -41,7 +42,7 @@ def list_entries():
 @login_required
 def add_entry():
     if not current_user.can_analyze:
-        flash('无权限', 'error')
+        flash(t('no_permission'), 'error')
         return redirect(url_for('knowledge.list_entries'))
 
     if request.method == 'POST':
@@ -50,7 +51,7 @@ def add_entry():
         try:
             json.loads(conditions_raw)
         except (json.JSONDecodeError, TypeError):
-            flash('条件JSON格式无效，请检查输入', 'error')
+            flash(t('invalid_json'), 'error')
             return render_template('knowledge/edit.html', entry=None)
 
         entry = KnowledgeRule(
@@ -69,7 +70,7 @@ def add_entry():
         db.session.add(AuditLog(user_id=current_user.id, action='add_knowledge',
                                 detail=entry.name, ip_address=request.remote_addr))
         db.session.commit()
-        flash('知识规则已添加', 'success')
+        flash(t('knowledge_added'), 'success')
         return redirect(url_for('knowledge.list_entries'))
 
     return render_template('knowledge/edit.html', entry=None)
@@ -79,7 +80,7 @@ def add_entry():
 @login_required
 def edit_entry(entry_id):
     if not current_user.can_analyze:
-        flash('无权限', 'error')
+        flash(t('no_permission'), 'error')
         return redirect(url_for('knowledge.list_entries'))
 
     entry = KnowledgeRule.query.get_or_404(entry_id)
@@ -89,7 +90,7 @@ def edit_entry(entry_id):
         try:
             json.loads(conditions_raw)
         except (json.JSONDecodeError, TypeError):
-            flash('条件JSON格式无效，请检查输入', 'error')
+            flash(t('invalid_json'), 'error')
             return render_template('knowledge/edit.html', entry=entry)
 
         entry.name = request.form.get('name', entry.name)
@@ -104,7 +105,7 @@ def edit_entry(entry_id):
         db.session.add(AuditLog(user_id=current_user.id, action='edit_knowledge',
                                 detail=entry.name, ip_address=request.remote_addr))
         db.session.commit()
-        flash('知识规则已更新', 'success')
+        flash(t('knowledge_updated'), 'success')
         return redirect(url_for('knowledge.list_entries'))
 
     return render_template('knowledge/edit.html', entry=entry)
@@ -114,13 +115,13 @@ def edit_entry(entry_id):
 @login_required
 def delete_entry(entry_id):
     if not current_user.is_admin:
-        flash('仅管理员可删除', 'error')
+        flash(t('admin_only_delete'), 'error')
         return redirect(url_for('knowledge.list_entries'))
 
     entry = KnowledgeRule.query.get_or_404(entry_id)
     db.session.delete(entry)
     db.session.commit()
-    flash('知识规则已删除', 'success')
+    flash(t('knowledge_deleted'), 'success')
     return redirect(url_for('knowledge.list_entries'))
 
 

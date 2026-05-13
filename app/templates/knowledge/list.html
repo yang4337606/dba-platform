@@ -1,21 +1,21 @@
 {% extends "base.html" %}
-{% block title %}知识库{% endblock %}
+{% block title %}{{ _('kb_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">知识库</h1>
-    <div class="page-subtitle">AWR分析规则与经验积累，支持自学习</div>
+    <h1 class="page-title">{{ _('kb_title') }}</h1>
+    <div class="page-subtitle">{{ _('kb_subtitle') }}</div>
   </div>
   <div class="btn-group">
-    <a href="{{ url_for('knowledge.stats') }}" class="btn btn-secondary">统计</a>
+    <a href="{{ url_for('knowledge.stats') }}" class="btn btn-secondary">{{ _('btn_stats') }}</a>
     {% if current_user.can_analyze %}
-    <a href="{{ url_for('knowledge.add_entry') }}" class="btn btn-primary">添加知识</a>
+    <a href="{{ url_for('knowledge.add_entry') }}" class="btn btn-primary">{{ _('btn_add_knowledge') }}</a>
     {% endif %}
   </div>
 </div>
 
 <div class="filter-bar">
-  <a href="{{ url_for('knowledge.list_entries') }}" class="filter-tag {% if not current_category %}active{% endif %}">全部</a>
+  <a href="{{ url_for('knowledge.list_entries') }}" class="filter-tag {% if not current_category %}active{% endif %}">{{ _('label_all') }}</a>
   {% for cat in categories %}
   <a href="?category={{ cat }}" class="filter-tag {% if current_category == cat %}active{% endif %}">{{ cat }}</a>
   {% endfor %}
@@ -34,9 +34,9 @@
   <div class="table-wrap">
   <table>
     <thead><tr>
-      <th>分类</th><th>名称</th><th>严重级别</th><th>来源</th>
-      <th>匹配次数</th><th>置信度</th><th>状态</th><th>启用</th>
-      {% if current_user.can_analyze %}<th>操作</th>{% endif %}
+      <th>{{ _('th_category') }}</th><th>{{ _('th_name') }}</th><th>{{ _('th_severity_level') }}</th><th>{{ _('th_source') }}</th>
+      <th>{{ _('th_match_count') }}</th><th>{{ _('th_confidence') }}</th><th>{{ _('th_status') }}</th><th>{{ _('th_enabled') }}</th>
+      {% if current_user.can_analyze %}<th>{{ _('th_operations') }}</th>{% endif %}
     </tr></thead>
     <tbody>
     {% for e in entries.items %}
@@ -45,10 +45,10 @@
       <td style="max-width:300px;">{{ e.name }}</td>
       <td><span class="badge badge-{{ e.severity }}">{{ e.severity }}</span></td>
       <td>
-        {% if e.source == 'learned' %}<span class="badge badge-success">自学习</span>
+        {% if e.source == 'learned' %}<span class="badge badge-success">{{ _('source_learned') }}</span>
         {% elif e.source == 'llm' %}<span class="llm-badge">LLM</span>
-        {% elif e.source == 'manual' %}<span class="badge badge-warning">手动</span>
-        {% else %}<span class="badge badge-muted">内置</span>{% endif %}
+        {% elif e.source == 'manual' %}<span class="badge badge-warning">{{ _('source_manual') }}</span>
+        {% else %}<span class="badge badge-muted">{{ _('source_builtin') }}</span>{% endif %}
       </td>
       <td style="font-family:var(--font-mono);">{{ e.hit_count }}</td>
       <td>
@@ -67,17 +67,17 @@
         {% else %}<span class="badge badge-danger">{{ e.status }}</span>{% endif %}
       </td>
       <td>
-        {% if e.is_active %}<span class="badge badge-success">启用</span>
-        {% else %}<span class="badge badge-muted">禁用</span>{% endif %}
+        {% if e.is_active %}<span class="badge badge-success">{{ _('label_enabled') }}</span>
+        {% else %}<span class="badge badge-muted">{{ _('label_disabled') }}</span>{% endif %}
       </td>
       {% if current_user.can_analyze %}
       <td>
         <div class="btn-group">
-          <a href="{{ url_for('knowledge.edit_entry', entry_id=e.id) }}" class="btn btn-sm btn-secondary">编辑</a>
+          <a href="{{ url_for('knowledge.edit_entry', entry_id=e.id) }}" class="btn btn-sm btn-secondary">{{ _('btn_edit') }}</a>
           {% if current_user.is_admin %}
           <form method="POST" action="{{ url_for('knowledge.delete_entry', entry_id=e.id) }}" style="display:inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-danger" data-confirm="确认删除？">删除</button>
+            <button class="btn btn-sm btn-danger" data-confirm="{{ _('confirm_delete') }}">{{ _('btn_delete') }}</button>
           </form>
           {% endif %}
         </div>
@@ -101,7 +101,7 @@
   {% endif %}
   {% else %}
   <div class="empty-state">
-    <div class="empty-state-text">暂无知识条目</div>
+    <div class="empty-state-text">{{ _('empty_knowledge') }}</div>
   </div>
   {% endif %}
 </div>

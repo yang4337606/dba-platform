@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}知识库统计{% endblock %}
+{% block title %}{{ _('kb_stats_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">知识库统计</h1>
-    <div class="page-subtitle">自学习效果与知识覆盖</div>
+    <h1 class="page-title">{{ _('kb_stats_title') }}</h1>
+    <div class="page-subtitle">{{ _('kb_stats_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('knowledge.list_entries') }}" class="btn btn-secondary">返回知识库</a>
+  <a href="{{ url_for('knowledge.list_entries') }}" class="btn btn-secondary">{{ _('btn_back_kb') }}</a>
 </div>
 
 <div class="stats-grid">
   <div class="stat-card">
     <div class="stat-value">{{ total }}</div>
-    <div class="stat-label">总条目数</div>
+    <div class="stat-label">{{ _('label_total_entries') }}</div>
   </div>
   {% for cat, cnt in by_source %}
   <div class="stat-card {% if cat == 'learned' %}success{% elif cat == 'manual' %}warning{% endif %}">
@@ -24,7 +24,7 @@
 
 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
   <div class="card">
-    <div class="card-header">按分类分布</div>
+    <div class="card-header">{{ _('section_by_category') }}</div>
     {% for cat, cnt in by_category %}
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <span class="badge badge-info">{{ cat }}</span>
@@ -34,7 +34,7 @@
   </div>
 
   <div class="card">
-    <div class="card-header">按状态分布</div>
+    <div class="card-header">{{ _('section_by_status') }}</div>
     {% for st, cnt in by_status %}
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <span class="badge badge-{% if st == 'active' %}success{% elif st == 'observed' %}info{% elif st == 'candidate' %}warning{% elif st == 'stale' %}muted{% else %}danger{% endif %}">{{ st }}</span>
@@ -44,7 +44,7 @@
   </div>
 
   <div class="card">
-    <div class="card-header">高频匹配 Top 10</div>
+    <div class="card-header">{{ _('section_top_matched') }}</div>
     {% for entry in top_matched %}
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
       <div>
@@ -53,12 +53,12 @@
       </div>
       <div style="text-align:right;">
         <div style="font-family:var(--font-mono);font-weight:700;">{{ entry.hit_count }}</div>
-        <div style="font-size:10px;color:var(--text-muted);">匹配</div>
+        <div style="font-size:10px;color:var(--text-muted);">{{ _('label_matches') }}</div>
       </div>
     </div>
     {% endfor %}
     {% if not top_matched %}
-    <div class="empty-state"><div class="empty-state-text">暂无匹配记录</div></div>
+    <div class="empty-state"><div class="empty-state-text">{{ _('empty_matches') }}</div></div>
     {% endif %}
   </div>
 </div>

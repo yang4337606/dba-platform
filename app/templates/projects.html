@@ -1,22 +1,22 @@
 {% extends "base.html" %}
-{% block title %}项目{% endblock %}
+{% block title %}{{ _('projects_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">GitHub 项目</h1>
-    <div class="page-subtitle">数据库运维自动化工具集</div>
+    <h1 class="page-title">{{ _('projects_github') }}</h1>
+    <div class="page-subtitle">{{ _('projects_desc') }}</div>
   </div>
   {% if current_user.is_authenticated and current_user.is_admin %}
   <form method="POST" action="{{ url_for('projects.sync') }}" style="display:inline;">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn btn-primary">同步 GitHub</button>
+    <button type="submit" class="btn btn-primary">{{ _('btn_sync_github') }}</button>
   </form>
   {% endif %}
 </div>
 
 {% if categories %}
 <div class="filter-bar">
-  <span class="filter-tag active">全部</span>
+  <span class="filter-tag active">{{ _('label_all') }}</span>
   {% for cat in categories %}
   <span class="filter-tag" onclick="filterProjects('{{ cat }}')">{{ cat }}</span>
   {% endfor %}
@@ -28,9 +28,9 @@
   <a href="{{ p.url }}" target="_blank" class="project-card" style="text-decoration:none;color:inherit;" data-category="{{ p.category }}">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <div class="project-name" style="margin-bottom:0;">{{ p.name }}</div>
-      {% if p.is_private %}<span class="badge badge-muted">Private</span>{% endif %}
+      {% if p.is_private %}<span class="badge badge-muted">{{ _('label_private') }}</span>{% endif %}
     </div>
-    <div class="project-desc">{{ p.description or '暂无描述' }}</div>
+    <div class="project-desc">{{ p.description or _('no_description') }}</div>
     <div class="project-meta">
       {% if p.language %}
       <span class="project-lang">
@@ -44,7 +44,7 @@
   {% else %}
   <div class="empty-state" style="grid-column:1/-1;">
     <div class="empty-state-icon">&#9783;</div>
-    <div class="empty-state-text">暂无项目数据，请管理员同步GitHub</div>
+    <div class="empty-state-text">{{ _('empty_projects') }}</div>
   </div>
   {% endfor %}
 </div>

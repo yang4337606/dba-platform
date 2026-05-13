@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}用户管理{% endblock %}
+{% block title %}{{ _('user_mgmt_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">用户管理</h1>
-    <div class="page-subtitle">管理系统用户与权限</div>
+    <h1 class="page-title">{{ _('user_mgmt_title') }}</h1>
+    <div class="page-subtitle">{{ _('user_mgmt_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('admin.add_user') }}" class="btn btn-primary">添加用户</a>
+  <a href="{{ url_for('admin.add_user') }}" class="btn btn-primary">{{ _('btn_add_user') }}</a>
 </div>
 
 <div class="card">
   <div class="table-wrap">
   <table>
-    <thead><tr><th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>状态</th><th>最后登录</th><th>创建时间</th><th>操作</th></tr></thead>
+    <thead><tr><th>{{ _('th_id') }}</th><th>{{ _('label_username') }}</th><th>{{ _('th_email') }}</th><th>{{ _('th_role') }}</th><th>{{ _('th_status') }}</th><th>{{ _('th_last_login') }}</th><th>{{ _('th_created_at') }}</th><th>{{ _('th_operations') }}</th></tr></thead>
     <tbody>
     {% for u in users %}
     <tr>
@@ -21,18 +21,18 @@
       <td style="font-size:12px;">{{ u.email }}</td>
       <td><span class="user-badge {{ u.role }}">{{ u.role }}</span></td>
       <td>
-        {% if u.is_active_user %}<span class="badge badge-success">活跃</span>
-        {% else %}<span class="badge badge-muted">禁用</span>{% endif %}
+        {% if u.is_active_user %}<span class="badge badge-success">{{ _('status_active') }}</span>
+        {% else %}<span class="badge badge-muted">{{ _('status_disabled') }}</span>{% endif %}
       </td>
-      <td style="font-size:12px;color:var(--text-muted);">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '从未' }}</td>
+      <td style="font-size:12px;color:var(--text-muted);">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else _('never_logged_in') }}</td>
       <td style="font-size:12px;color:var(--text-muted);">{{ u.created_at.strftime('%Y-%m-%d') }}</td>
       <td>
         <div class="btn-group">
-          <a href="{{ url_for('admin.edit_user', user_id=u.id) }}" class="btn btn-sm btn-secondary">编辑</a>
+          <a href="{{ url_for('admin.edit_user', user_id=u.id) }}" class="btn btn-sm btn-secondary">{{ _('btn_edit') }}</a>
           {% if u.id != current_user.id %}
           <form method="POST" action="{{ url_for('admin.delete_user', user_id=u.id) }}" style="display:inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button class="btn btn-sm btn-danger" data-confirm="确认删除用户 {{ u.username }}？">删除</button>
+            <button class="btn btn-sm btn-danger" data-confirm="{{ _('confirm_delete_user', username=u.username) }}">{{ _('btn_delete') }}</button>
           </form>
           {% endif %}
         </div>
@@ -45,25 +45,25 @@
 </div>
 
 <div class="card" style="margin-top:20px;">
-  <div class="card-header">角色说明</div>
+  <div class="card-header">{{ _('section_role_desc') }}</div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
     <div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span class="user-badge admin">admin</span><span style="font-weight:600;">管理员</span>
+        <span class="user-badge admin">admin</span><span style="font-weight:600;">{{ _('role_admin') }}</span>
       </div>
-      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">全部权限：用户管理、系统设置、AWR上传/分析/删除、知识库管理</div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">{{ _('role_admin_desc') }}</div>
     </div>
     <div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span class="user-badge analyst">analyst</span><span style="font-weight:600;">分析师</span>
+        <span class="user-badge analyst">analyst</span><span style="font-weight:600;">{{ _('role_analyst') }}</span>
       </div>
-      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">AWR上传与分析、知识库编辑、查看所有报告</div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">{{ _('role_analyst_desc') }}</div>
     </div>
     <div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <span class="user-badge viewer">viewer</span><span style="font-weight:600;">查看者</span>
+        <span class="user-badge viewer">viewer</span><span style="font-weight:600;">{{ _('role_viewer') }}</span>
       </div>
-      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">仅查看自己上传的报告和分析结果</div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">{{ _('role_viewer_desc') }}</div>
     </div>
   </div>
 </div>

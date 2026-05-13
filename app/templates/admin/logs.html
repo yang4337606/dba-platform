@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% block title %}审计日志{% endblock %}
+{% block title %}{{ _('audit_log_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">审计日志</h1>
-    <div class="page-subtitle">系统操作记录</div>
+    <h1 class="page-title">{{ _('audit_log_title') }}</h1>
+    <div class="page-subtitle">{{ _('audit_log_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('admin.index') }}" class="btn btn-secondary">返回管理</a>
+  <a href="{{ url_for('admin.index') }}" class="btn btn-secondary">{{ _('btn_back_admin') }}</a>
 </div>
 
 <div class="card">
   <div class="table-wrap">
   <table>
-    <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>详情</th><th>IP地址</th></tr></thead>
+    <thead><tr><th>{{ _('th_time') }}</th><th>{{ _('th_user') }}</th><th>{{ _('th_action') }}</th><th>{{ _('th_detail') }}</th><th>{{ _('th_ip_address') }}</th></tr></thead>
     <tbody>
     {% for log in logs.items %}
     <tr>

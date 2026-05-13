@@ -1,42 +1,42 @@
 {% extends "base.html" %}
-{% block title %}上传AWR报告{% endblock %}
+{% block title %}{{ _('awr_upload_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">上传 AWR 报告</h1>
-    <div class="page-subtitle">支持 Oracle AWR HTML 格式报告</div>
+    <h1 class="page-title">{{ _('awr_upload_heading') }}</h1>
+    <div class="page-subtitle">{{ _('awr_upload_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+  <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">{{ _('btn_back_list') }}</a>
 </div>
 
 <div class="card" style="max-width:640px;">
   <form method="POST" enctype="multipart/form-data">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
-      <label class="form-label">报告标题</label>
-      <input type="text" name="title" class="form-input" placeholder="例: PROD数据库-20260512快照" required>
+      <label class="form-label">{{ _('label_report_title') }}</label>
+      <input type="text" name="title" class="form-input" placeholder="{{ _('placeholder_report_title') }}" required>
     </div>
 
     <div class="form-group">
-      <label class="form-label">AWR报告文件</label>
+      <label class="form-label">{{ _('label_awr_file') }}</label>
       <div class="upload-zone">
         <div class="upload-icon">&#9670;</div>
-        <div class="upload-text">点击或拖拽文件到此处</div>
-        <div class="upload-hint">支持 .html / .htm 格式，最大 50MB</div>
+        <div class="upload-text">{{ _('upload_drop_hint') }}</div>
+        <div class="upload-hint">{{ _('upload_format_hint') }}</div>
         <input type="file" id="file-input" name="file" accept=".html,.htm" style="display:none;" required>
       </div>
     </div>
 
     <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:12px;">
-      上传并解析
+      {{ _('btn_upload_parse') }}
     </button>
   </form>
 </div>
 
 <div class="card" style="max-width:640px;margin-top:20px;">
-  <div class="card-header">如何生成AWR报告</div>
+  <div class="card-header">{{ _('how_to_generate') }}</div>
   <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
-    <p>在Oracle数据库中执行以下命令生成AWR HTML报告：</p>
+    <p>{{ _('generate_instruction') }}</p>
     <pre style="background:var(--bg-input);padding:12px;border-radius:6px;margin-top:8px;font-family:var(--font-mono);font-size:12px;overflow-x:auto;">
 -- 方法1: 使用awrrpt.sql (推荐)
 SQL> @$ORACLE_HOME/rdbms/admin/awrrpt.sql

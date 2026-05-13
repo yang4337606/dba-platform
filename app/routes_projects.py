@@ -2,6 +2,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from .models import db, GitHubProject, AuditLog
+from .i18n import t
 
 projects_bp = Blueprint('projects', __name__, url_prefix='/projects')
 
@@ -39,7 +40,7 @@ def list_projects():
 @login_required
 def sync():
     if not current_user.is_admin:
-        flash('需要管理员权限', 'error')
+        flash(t('admin_required'), 'error')
         return redirect(url_for('projects.list_projects'))
 
     for repo in GITHUB_REPOS:
@@ -68,5 +69,5 @@ def sync():
     db.session.add(AuditLog(user_id=current_user.id, action='sync_github',
                             ip_address=request.remote_addr))
     db.session.commit()
-    flash(f'已同步 {len(GITHUB_REPOS)} 个项目', 'success')
+    flash(t('projects_synced', count=len(GITHUB_REPOS)), 'success')
     return redirect(url_for('projects.list_projects'))

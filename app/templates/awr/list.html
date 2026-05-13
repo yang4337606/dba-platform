@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}AWR报告列表{% endblock %}
+{% block title %}{{ _('awr_list_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">AWR 报告</h1>
-    <div class="page-subtitle">Oracle AWR报告管理与分析</div>
+    <h1 class="page-title">{{ _('awr_list_heading') }}</h1>
+    <div class="page-subtitle">{{ _('awr_list_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('awr.upload') }}" class="btn btn-primary">上传报告</a>
+  <a href="{{ url_for('awr.upload') }}" class="btn btn-primary">{{ _('btn_upload_report') }}</a>
 </div>
 
 <div class="card">
@@ -14,8 +14,8 @@
   <div class="table-wrap">
   <table>
     <thead><tr>
-      <th>ID</th><th>标题</th><th>数据库</th><th>实例</th>
-      <th>快照范围</th><th>状态</th><th>上传时间</th><th>操作</th>
+      <th>{{ _('th_id') }}</th><th>{{ _('th_title') }}</th><th>{{ _('th_database') }}</th><th>{{ _('th_instance') }}</th>
+      <th>{{ _('th_snap_range') }}</th><th>{{ _('th_status') }}</th><th>{{ _('th_upload_time') }}</th><th>{{ _('th_operations') }}</th>
     </tr></thead>
     <tbody>
     {% for r in reports.items %}
@@ -26,19 +26,19 @@
       <td style="font-family:var(--font-mono);font-size:12px;">{{ r.instance_name or '-' }}</td>
       <td style="font-size:12px;">{{ r.snap_begin_id or '?' }} - {{ r.snap_end_id or '?' }}</td>
       <td>
-        {% if r.status == 'analyzed' %}<span class="badge badge-success">已分析</span>
-        {% elif r.status == 'parsed' %}<span class="badge badge-info">已解析</span>
-        {% elif r.status == 'error' %}<span class="badge badge-danger">错误</span>
+        {% if r.status == 'analyzed' %}<span class="badge badge-success">{{ _('status_analyzed') }}</span>
+        {% elif r.status == 'parsed' %}<span class="badge badge-info">{{ _('status_parsed') }}</span>
+        {% elif r.status == 'error' %}<span class="badge badge-danger">{{ _('status_error') }}</span>
         {% else %}<span class="badge badge-muted">{{ r.status }}</span>{% endif %}
       </td>
       <td style="font-size:12px;color:var(--text-muted);">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
       <td>
         <div class="btn-group">
-          <a href="{{ url_for('awr.view_report', report_id=r.id) }}" class="btn btn-sm btn-secondary">查看</a>
+          <a href="{{ url_for('awr.view_report', report_id=r.id) }}" class="btn btn-sm btn-secondary">{{ _('btn_view') }}</a>
           {% if current_user.is_admin %}
           <form method="POST" action="{{ url_for('awr.delete_report', report_id=r.id) }}" style="display:inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-danger" data-confirm="确认删除此报告？">删除</button>
+            <button type="submit" class="btn btn-sm btn-danger" data-confirm="{{ _('confirm_delete_report') }}">{{ _('btn_delete') }}</button>
           </form>
           {% endif %}
         </div>
@@ -63,8 +63,8 @@
   {% else %}
   <div class="empty-state">
     <div class="empty-state-icon">&#9670;</div>
-    <div class="empty-state-text">暂无AWR报告</div>
-    <a href="{{ url_for('awr.upload') }}" class="btn btn-primary" style="margin-top:16px;">上传第一份报告</a>
+    <div class="empty-state-text">{{ _('empty_awr_list') }}</div>
+    <a href="{{ url_for('awr.upload') }}" class="btn btn-primary" style="margin-top:16px;">{{ _('btn_upload_first') }}</a>
   </div>
   {% endif %}
 </div>

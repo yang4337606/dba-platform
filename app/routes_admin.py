@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from functools import wraps
 from .models import db, User, AWRReport, AWRAnalysisResult, KnowledgeRule, AuditLog, SystemSetting, GitHubProject
+from .i18n import t
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -11,7 +12,7 @@ def admin_required(f):
     @login_required
     def decorated(*args, **kwargs):
         if not current_user.is_admin:
-            flash('需要管理员权限', 'error')
+            flash(t('admin_required'), 'error')
             return redirect(url_for('main.dashboard'))
         return f(*args, **kwargs)
     return decorated
@@ -50,7 +51,7 @@ def add_user():
         role = request.form.get('role', 'viewer')
 
         if User.query.filter_by(username=username).first():
-            flash('用户名已存在', 'error')
+            flash(t('username_exists'), 'error')
             return redirect(request.url)
 
         user = User(username=username, email=email, role=role)
@@ -59,7 +60,7 @@ def add_user():
         db.session.add(AuditLog(user_id=current_user.id, action='add_user',
                                 detail=username, ip_address=request.remote_addr))
         db.session.commit()
-        flash(f'用户 {username} 已创建', 'success')
+        flash(t('user_created', username=username), 'success')
         return redirect(url_for('admin.users'))
 
     return render_template('admin/user_form.html', user=None)
@@ -79,7 +80,7 @@ def edit_user(user_id):
         db.session.add(AuditLog(user_id=current_user.id, action='edit_user',
                                 detail=user.username, ip_address=request.remote_addr))
         db.session.commit()
-        flash('用户已更新', 'success')
+        flash(t('user_updated'), 'success')
         return redirect(url_for('admin.users'))
 
     return render_template('admin/user_form.html', user=user)
@@ -90,11 +91,11 @@ def edit_user(user_id):
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
     if user.id == current_user.id:
-        flash('不能删除当前登录用户', 'error')
+        flash(t('cannot_delete_self'), 'error')
         return redirect(url_for('admin.users'))
     db.session.delete(user)
     db.session.commit()
-    flash('用户已删除', 'success')
+    flash(t('user_deleted'), 'success')
     return redirect(url_for('admin.users'))
 
 
@@ -111,7 +112,7 @@ def settings():
             if key == 'llm_api_key' and (not val or val.strip('*') == ''):
                 continue
             SystemSetting.set(key, val)
-        flash('设置已保存', 'success')
+        flash(t('settings_saved'), 'success')
         return redirect(url_for('admin.settings'))
 
     current_settings = {}

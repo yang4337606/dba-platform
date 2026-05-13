@@ -1,47 +1,47 @@
 {% extends "base.html" %}
-{% block title %}控制台 - DBA平台{% endblock %}
+{% block title %}{{ _('dashboard_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">控制台</h1>
-    <div class="page-subtitle">欢迎回来，{{ current_user.username }}</div>
+    <h1 class="page-title">{{ _('nav_dashboard') }}</h1>
+    <div class="page-subtitle">{{ _('dashboard_welcome', username=current_user.username) }}</div>
   </div>
-  <a href="{{ url_for('awr.upload') }}" class="btn btn-primary">上传AWR报告</a>
+  <a href="{{ url_for('awr.upload') }}" class="btn btn-primary">{{ _('btn_upload_awr') }}</a>
 </div>
 
 <div class="stats-grid">
   <div class="stat-card">
     <div class="stat-value">{{ report_count }}</div>
-    <div class="stat-label">AWR 报告</div>
+    <div class="stat-label">{{ _('stat_awr_reports') }}</div>
   </div>
   <div class="stat-card success">
     <div class="stat-value">{{ analysis_count }}</div>
-    <div class="stat-label">分析报告</div>
+    <div class="stat-label">{{ _('stat_analyses') }}</div>
   </div>
   <div class="stat-card warning">
     <div class="stat-value">{{ kb_count }}</div>
-    <div class="stat-label">知识条目</div>
+    <div class="stat-label">{{ _('stat_knowledge') }}</div>
   </div>
 </div>
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
   <div class="card">
     <div class="card-header">
-      <span>最近 AWR 报告</span>
-      <a href="{{ url_for('awr.list_reports') }}" class="btn btn-sm btn-secondary">查看全部</a>
+      <span>{{ _('recent_awr') }}</span>
+      <a href="{{ url_for('awr.list_reports') }}" class="btn btn-sm btn-secondary">{{ _('btn_view_all') }}</a>
     </div>
     {% if recent_reports %}
     <table>
-      <thead><tr><th>标题</th><th>数据库</th><th>状态</th><th>时间</th></tr></thead>
+      <thead><tr><th>{{ _('th_title') }}</th><th>{{ _('th_database') }}</th><th>{{ _('th_status') }}</th><th>{{ _('th_time') }}</th></tr></thead>
       <tbody>
       {% for r in recent_reports %}
       <tr>
         <td><a href="{{ url_for('awr.view_report', report_id=r.id) }}">{{ r.title }}</a></td>
         <td style="font-family:var(--font-mono);font-size:12px;">{{ r.db_name or '-' }}</td>
         <td>
-          {% if r.status == 'analyzed' %}<span class="badge badge-success">已分析</span>
-          {% elif r.status == 'parsed' %}<span class="badge badge-info">已解析</span>
-          {% elif r.status == 'error' %}<span class="badge badge-danger">错误</span>
+          {% if r.status == 'analyzed' %}<span class="badge badge-success">{{ _('status_analyzed') }}</span>
+          {% elif r.status == 'parsed' %}<span class="badge badge-info">{{ _('status_parsed') }}</span>
+          {% elif r.status == 'error' %}<span class="badge badge-danger">{{ _('status_error') }}</span>
           {% else %}<span class="badge badge-muted">{{ r.status }}</span>{% endif %}
         </td>
         <td style="font-size:12px;color:var(--text-muted);">{{ r.created_at.strftime('%m-%d %H:%M') }}</td>
@@ -50,18 +50,18 @@
       </tbody>
     </table>
     {% else %}
-    <div class="empty-state"><div class="empty-state-text">暂无AWR报告</div></div>
+    <div class="empty-state"><div class="empty-state-text">{{ _('empty_awr_reports') }}</div></div>
     {% endif %}
   </div>
 
   <div class="card">
     <div class="card-header">
-      <span>最近分析</span>
-      <a href="{{ url_for('knowledge.list_entries') }}" class="btn btn-sm btn-secondary">知识库</a>
+      <span>{{ _('recent_analyses') }}</span>
+      <a href="{{ url_for('knowledge.list_entries') }}" class="btn btn-sm btn-secondary">{{ _('label_knowledge_base') }}</a>
     </div>
     {% if recent_analyses %}
     <table>
-      <thead><tr><th>报告</th><th>健康</th><th>类型</th><th>时间</th></tr></thead>
+      <thead><tr><th>{{ _('th_report') }}</th><th>{{ _('th_health') }}</th><th>{{ _('th_type') }}</th><th>{{ _('th_time') }}</th></tr></thead>
       <tbody>
       {% for a in recent_analyses %}
       <tr>
@@ -73,7 +73,7 @@
         </td>
         <td>
           {% if a.analysis_type == 'combined' %}<span class="llm-badge">LLM</span>
-          {% else %}<span class="badge badge-info">规则</span>{% endif %}
+          {% else %}<span class="badge badge-info">{{ _('label_rule') }}</span>{% endif %}
         </td>
         <td style="font-size:12px;color:var(--text-muted);">{{ a.created_at.strftime('%m-%d %H:%M') }}</td>
       </tr>
@@ -81,7 +81,7 @@
       </tbody>
     </table>
     {% else %}
-    <div class="empty-state"><div class="empty-state-text">暂无分析报告</div></div>
+    <div class="empty-state"><div class="empty-state-text">{{ _('empty_analyses') }}</div></div>
     {% endif %}
   </div>
 </div>

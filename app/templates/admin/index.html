@@ -1,45 +1,45 @@
 {% extends "base.html" %}
-{% block title %}管理后台{% endblock %}
+{% block title %}{{ _('admin_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">管理后台</h1>
-    <div class="page-subtitle">系统概览与管理</div>
+    <h1 class="page-title">{{ _('admin_title') }}</h1>
+    <div class="page-subtitle">{{ _('admin_subtitle') }}</div>
   </div>
 </div>
 
 <div class="stats-grid">
-  <div class="stat-card"><div class="stat-value">{{ stats.users }}</div><div class="stat-label">用户数</div></div>
-  <div class="stat-card"><div class="stat-value">{{ stats.reports }}</div><div class="stat-label">AWR报告</div></div>
-  <div class="stat-card success"><div class="stat-value">{{ stats.analyses }}</div><div class="stat-label">分析报告</div></div>
-  <div class="stat-card warning"><div class="stat-value">{{ stats.knowledge }}</div><div class="stat-label">知识条目</div></div>
-  <div class="stat-card"><div class="stat-value">{{ stats.learned_kb }}</div><div class="stat-label">自学习条目</div></div>
-  <div class="stat-card"><div class="stat-value">{{ stats.projects }}</div><div class="stat-label">GitHub项目</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.users }}</div><div class="stat-label">{{ _('stat_users') }}</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.reports }}</div><div class="stat-label">{{ _('stat_awr') }}</div></div>
+  <div class="stat-card success"><div class="stat-value">{{ stats.analyses }}</div><div class="stat-label">{{ _('stat_analysis') }}</div></div>
+  <div class="stat-card warning"><div class="stat-value">{{ stats.knowledge }}</div><div class="stat-label">{{ _('stat_kb') }}</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.learned_kb }}</div><div class="stat-label">{{ _('stat_learned') }}</div></div>
+  <div class="stat-card"><div class="stat-value">{{ stats.projects }}</div><div class="stat-label">{{ _('stat_github') }}</div></div>
 </div>
 
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:24px;">
   <a href="{{ url_for('admin.users') }}" class="card" style="text-decoration:none;color:inherit;text-align:center;padding:24px;">
     <div style="font-size:24px;margin-bottom:8px;">&#9881;</div>
-    <div style="font-weight:600;">用户管理</div>
+    <div style="font-weight:600;">{{ _('link_user_mgmt') }}</div>
   </a>
   <a href="{{ url_for('admin.settings') }}" class="card" style="text-decoration:none;color:inherit;text-align:center;padding:24px;">
     <div style="font-size:24px;margin-bottom:8px;">&#9670;</div>
-    <div style="font-weight:600;">系统设置</div>
+    <div style="font-weight:600;">{{ _('link_settings') }}</div>
   </a>
   <a href="{{ url_for('admin.logs') }}" class="card" style="text-decoration:none;color:inherit;text-align:center;padding:24px;">
     <div style="font-size:24px;margin-bottom:8px;">&#9783;</div>
-    <div style="font-weight:600;">审计日志</div>
+    <div style="font-weight:600;">{{ _('link_audit_log') }}</div>
   </a>
   <a href="{{ url_for('knowledge.stats') }}" class="card" style="text-decoration:none;color:inherit;text-align:center;padding:24px;">
     <div style="font-size:24px;margin-bottom:8px;">&#9733;</div>
-    <div style="font-weight:600;">知识库统计</div>
+    <div style="font-weight:600;">{{ _('link_kb_stats') }}</div>
   </a>
 </div>
 
 <div class="card">
-  <div class="card-header">最近审计日志</div>
+  <div class="card-header">{{ _('admin_recent_logs') }}</div>
   <table>
-    <thead><tr><th>时间</th><th>用户</th><th>操作</th><th>详情</th><th>IP</th></tr></thead>
+    <thead><tr><th>{{ _('th_time') }}</th><th>{{ _('th_user') }}</th><th>{{ _('th_action') }}</th><th>{{ _('th_detail') }}</th><th>{{ _('th_ip') }}</th></tr></thead>
     <tbody>
     {% for log in recent_logs %}
     <tr>

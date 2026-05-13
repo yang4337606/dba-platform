@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}系统设置{% endblock %}
+{% block title %}{{ _('settings_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">系统设置</h1>
-    <div class="page-subtitle">LLM集成配置与站点设置</div>
+    <h1 class="page-title">{{ _('settings_title') }}</h1>
+    <div class="page-subtitle">{{ _('settings_subtitle') }}</div>
   </div>
-  <a href="{{ url_for('admin.index') }}" class="btn btn-secondary">返回</a>
+  <a href="{{ url_for('admin.index') }}" class="btn btn-secondary">{{ _('btn_back') }}</a>
 </div>
 
 <form method="POST">
@@ -15,61 +15,61 @@
     <!-- LLM Configuration -->
     <div class="card">
       <div class="card-header">
-        <span class="llm-badge" style="margin-right:8px;">AI</span> 大模型集成
+        <span class="llm-badge" style="margin-right:8px;">AI</span> {{ _('section_llm') }}
       </div>
       <div class="form-group">
-        <label class="form-label">LLM 提供商</label>
+        <label class="form-label">{{ _('label_llm_provider') }}</label>
         <select name="llm_provider" class="form-select">
-          <option value="none" {% if settings.get('llm_provider') == 'none' %}selected{% endif %}>未启用</option>
+          <option value="none" {% if settings.get('llm_provider') == 'none' %}selected{% endif %}>{{ _('llm_none') }}</option>
           <option value="openai" {% if settings.get('llm_provider') == 'openai' %}selected{% endif %}>OpenAI (GPT-4o)</option>
           <option value="deepseek" {% if settings.get('llm_provider') == 'deepseek' %}selected{% endif %}>DeepSeek</option>
-          <option value="custom" {% if settings.get('llm_provider') == 'custom' %}selected{% endif %}>自定义 (兼容OpenAI API)</option>
+          <option value="custom" {% if settings.get('llm_provider') == 'custom' %}selected{% endif %}>{{ _('llm_custom') }}</option>
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">API Key</label>
-        <input type="password" name="llm_api_key" class="form-input" value="{{ '********' if settings.get('llm_api_key') else '' }}" placeholder="sk-... (留空保持现有密钥不变)">
+        <label class="form-label">{{ _('label_api_key') }}</label>
+        <input type="password" name="llm_api_key" class="form-input" value="{{ '********' if settings.get('llm_api_key') else '' }}" placeholder="{{ _('placeholder_api_key') }}">
       </div>
       <div class="form-group">
-        <label class="form-label">API URL (自定义时填写)</label>
+        <label class="form-label">{{ _('label_api_url') }}</label>
         <input type="text" name="llm_api_url" class="form-input" value="{{ settings.get('llm_api_url', '') }}" placeholder="https://api.example.com/v1/chat/completions">
       </div>
       <div class="form-group">
-        <label class="form-label">模型名称</label>
+        <label class="form-label">{{ _('label_model_name') }}</label>
         <input type="text" name="llm_model" class="form-input" value="{{ settings.get('llm_model', '') }}" placeholder="gpt-4o / deepseek-chat / ...">
       </div>
       <div style="font-size:12px;color:var(--text-muted);line-height:1.6;padding:12px;background:var(--bg-input);border-radius:6px;">
-        <strong>说明：</strong>配置LLM后，在AWR分析时可勾选"LLM增强"，系统会将解析后的AWR数据发送给大模型，获取更专业的分析建议。
-        支持OpenAI兼容API格式，包括国内各类大模型服务。
+        {{ _('llm_help_1') }}
+        {{ _('llm_help_2') }}
       </div>
     </div>
 
     <!-- Site Settings -->
     <div class="card">
-      <div class="card-header">站点设置</div>
+      <div class="card-header">{{ _('section_site') }}</div>
       <div class="form-group">
-        <label class="form-label">站点标题</label>
-        <input type="text" name="site_title" class="form-input" value="{{ settings.get('site_title', 'DBA工具平台') }}">
+        <label class="form-label">{{ _('label_site_title') }}</label>
+        <input type="text" name="site_title" class="form-input" value="{{ settings.get('site_title', _('default_site_title')) }}">
       </div>
       <div class="form-group">
-        <label class="form-label">站点描述</label>
-        <textarea name="site_description" class="form-textarea">{{ settings.get('site_description', 'Oracle AWR分析 · 知识库 · 自动化运维') }}</textarea>
+        <label class="form-label">{{ _('label_site_desc') }}</label>
+        <textarea name="site_description" class="form-textarea">{{ settings.get('site_description', _('default_site_desc')) }}</textarea>
       </div>
 
       <div style="margin-top:20px;">
-        <div class="card-header" style="padding-left:0;">自学习机制说明</div>
+        <div class="card-header" style="padding-left:0;">{{ _('section_learning') }}</div>
         <div style="font-size:12px;color:var(--text-secondary);line-height:1.8;">
-          <p><strong>1. 模式识别学习：</strong>每次分析AWR报告时，系统自动提取未识别的等待事件模式，作为新知识条目（置信度初始30%）。</p>
-          <p><strong>2. 置信度增长：</strong>每当知识条目在新报告中被匹配到，匹配计数+1，置信度自动提升（每次+2%，上限100%）。</p>
-          <p><strong>3. LLM增强：</strong>启用大模型后，可将AWR数据发送给AI获取专业分析，分析结果可手动录入知识库。</p>
-          <p><strong>4. 人工修正：</strong>分析师可手动添加、编辑、启用/禁用知识条目，修正自学习结果。</p>
+          <p>{{ _('learning_note_1') }}</p>
+          <p>{{ _('learning_note_2') }}</p>
+          <p>{{ _('learning_note_3') }}</p>
+          <p>{{ _('learning_note_4') }}</p>
         </div>
       </div>
     </div>
   </div>
 
   <div style="margin-top:20px;">
-    <button type="submit" class="btn btn-primary" style="padding:12px 32px;">保存设置</button>
+    <button type="submit" class="btn btn-primary" style="padding:12px 32px;">{{ _('btn_save_settings') }}</button>
   </div>
 </form>
 {% endblock %}

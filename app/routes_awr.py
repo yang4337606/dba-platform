@@ -13,6 +13,7 @@ from .awr import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer
                    compute_composite_health_score,
                    AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer,
                    WorkloadClassifier)
+from .i18n import t
 
 logger = logging.getLogger(__name__)
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
@@ -41,16 +42,16 @@ def list_reports():
 def upload():
     if request.method == 'POST':
         if 'file' not in request.files:
-            flash('请选择文件', 'error')
+            flash(t('no_file_selected'), 'error')
             return redirect(request.url)
 
         file = request.files['file']
         if file.filename == '':
-            flash('未选择文件', 'error')
+            flash(t('file_not_selected'), 'error')
             return redirect(request.url)
 
         if not _allowed_file(file.filename):
-            flash('仅支持 HTML/HTM 格式的AWR报告（文本格式暂不支持）', 'error')
+            flash(t('invalid_file_format'), 'error')
             return redirect(request.url)
 
         filename = secure_filename(file.filename)
@@ -65,7 +66,7 @@ def upload():
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 html_content = f.read()
         except Exception as e:
-            flash(f'文件读取失败: {str(e)}', 'error')
+            flash(t('file_read_error', error=str(e)), 'error')
             return redirect(request.url)
 
         # Parse the AWR report
@@ -103,7 +104,7 @@ def upload():
             db.session.add(AuditLog(user_id=current_user.id, action='upload_awr',
                                     detail=filename, ip_address=request.remote_addr))
             db.session.commit()
-            flash('AWR报告上传并解析成功', 'success')
+            flash(t('awr_upload_success'), 'success')
             return redirect(url_for('awr.view_report', report_id=report.id))
 
         except Exception as e:
@@ -118,7 +119,7 @@ def upload():
             )
             db.session.add(report)
             db.session.commit()
-            flash(f'AWR报告解析出错: {str(e)}', 'error')
+            flash(t('awr_parse_error', error=str(e)), 'error')
             return redirect(url_for('awr.list_reports'))
 
     return render_template('awr/upload.html')
@@ -641,7 +642,7 @@ def _reconstruct_parsed_data(report):
 def view_report(report_id):
     report = AWRReport.query.get_or_404(report_id)
     if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
-        flash('无权查看此报告', 'error')
+        flash(t('no_view_permission'), 'error')
         return redirect(url_for('awr.list_reports'))
 
     # Load metrics grouped by type
@@ -662,14 +663,14 @@ def view_report(report_id):
 @login_required
 def analyze_report(report_id):
     if not current_user.can_analyze:
-        flash('无分析权限', 'error')
+        flash(t('no_analyze_permission'), 'error')
         return redirect(url_for('awr.view_report', report_id=report_id))
 
     report = AWRReport.query.get_or_404(report_id)
 
     # Prevent duplicate analysis submissions
     if report.status == 'analyzing':
-        flash('分析正在进行中，请稍后刷新查看结果', 'info')
+        flash(t('analysis_in_progress'), 'info')
         return redirect(url_for('awr.view_report', report_id=report_id))
 
     use_llm = request.form.get('use_llm') == 'on'
@@ -684,7 +685,7 @@ def analyze_report(report_id):
     app = current_app._get_current_object()
     _analysis_executor.submit(_run_analysis, app, report_id, user_id, use_llm, ip_address)
 
-    flash('分析已提交，请稍后刷新查看结果', 'info')
+    flash(t('analysis_submitted'), 'info')
     return redirect(url_for('awr.view_report', report_id=report_id))
 
 
@@ -723,13 +724,13 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
             for ap in sql_anti_patterns:
                 problems.append({
                     'problem_type': 'sql_anti_pattern',
-                    'title': f"SQL反模式: {ap['anti_pattern']} (SQL_ID={ap['sql_id']})",
+                    'title': t('sql_anti_pattern_title', pattern=ap['anti_pattern'], sql_id=ap['sql_id']),
                     'severity': ap['severity'],
                     'health_level': 'warning' if ap['severity'] in ('low', 'medium') else 'serious',
                     'metric_name': f"anti_pattern_{ap['anti_pattern'].lower()}",
                     'metric_value': None,
                     'metric_unit': '',
-                    'evidence': f"{ap['description']}\nSQL片段: {ap['sql_snippet'][:100]}",
+                    'evidence': t('sql_snippet_evidence', description=ap['description'], snippet=ap['sql_snippet'][:100]),
                     'threshold_warning': None,
                     'threshold_serious': None,
                 })
@@ -745,11 +746,11 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
                     continue
                 if total_pct > 40:
                     correlations.append({
-                        'title': f'Wait Class "{wclass}" 累计占 DB Time {total_pct:.1f}%',
-                        'trigger_problem': f'{wclass} 类等待事件汇总',
-                        'related_evidence': [f'{wclass} 类事件合计 {total_pct:.1f}% DB Time'],
-                        'root_cause': f'{wclass} 类等待是主要性能瓶颈方向',
-                        'suggestion': f'重点关注 {wclass} 类下的各具体等待事件',
+                        'title': t('wait_class_title', wclass=wclass, pct=total_pct),
+                        'trigger_problem': t('wait_class_trigger', wclass=wclass),
+                        'related_evidence': [t('wait_class_evidence', wclass=wclass, pct=total_pct)],
+                        'root_cause': t('wait_class_root_cause', wclass=wclass),
+                        'suggestion': t('wait_class_suggestion', wclass=wclass),
                     })
 
             # Step 3.7: Parameter recommendations and version notes
@@ -807,24 +808,24 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
             db_info = parsed_data.get('db_info', {})
             snap_info = parsed_data.get('snap_info', {})
             summary_parts = [
-                f"数据库: {db_info.get('db_name', 'N/A')}/{db_info.get('instance_name', 'N/A')}",
-                f"版本: {db_info.get('db_version', 'N/A')}",
-                f"快照: {snap_info.get('begin_id', 'N/A')} - {snap_info.get('end_id', 'N/A')}",
-                f"持续时间: {snap_info.get('elapsed_seconds', 'N/A')}秒",
-                f"健康评分: {composite_score}/100 ({health_level})",
-                f"发现问题: {len(all_problems)}个",
+                t('summary_database', db_name=db_info.get('db_name', 'N/A'), instance_name=db_info.get('instance_name', 'N/A')),
+                t('summary_version', version=db_info.get('db_version', 'N/A')),
+                t('summary_snapshot', begin_id=snap_info.get('begin_id', 'N/A'), end_id=snap_info.get('end_id', 'N/A')),
+                t('summary_duration', seconds=snap_info.get('elapsed_seconds', 'N/A')),
+                t('summary_health_score', score=composite_score, level=health_level),
+                t('summary_problems_found', count=len(all_problems)),
             ]
             if sql_anti_patterns:
-                summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
+                summary_parts.append(t('summary_sql_anti_patterns', count=len(sql_anti_patterns)))
             if param_recommendations:
-                summary_parts.append(f"参数建议: {len(param_recommendations)}个")
+                summary_parts.append(t('summary_param_suggestions', count=len(param_recommendations)))
             if advisory_recommendations:
-                summary_parts.append(f"Advisory建议: {len(advisory_recommendations)}个")
+                summary_parts.append(t('summary_advisory_suggestions', count=len(advisory_recommendations)))
             if time_model_findings:
-                summary_parts.append(f"时间模型发现: {len(time_model_findings)}个")
-            summary_parts.append(f"负载类型: {workload_info['workload_type']}")
+                summary_parts.append(t('summary_time_model_findings', count=len(time_model_findings)))
+            summary_parts.append(t('summary_workload_type', wtype=workload_info['workload_type']))
             if llm_result:
-                summary_parts.append("(含LLM增强分析)")
+                summary_parts.append(t('summary_llm_enhanced'))
             summary = ' | '.join(summary_parts)
 
             # Step 7: Create AWRAnalysisResult
@@ -861,7 +862,7 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
                     report_id=report.id,
                     analysis_id=analysis.id,
                     problem_type=p.get('problem_type', p.get('category', 'general')),
-                    title=p.get('title', p.get('name', 'Unknown Problem')),
+                    title=p.get('title', p.get('name', t('unknown_problem'))),
                     severity=p.get('severity', 'medium'),
                     health_level=p.get('health_level', 'warning'),
                     metric_name=p.get('metric_name', ''),
@@ -906,7 +907,7 @@ def view_analysis(report_id, analysis_id):
     report = AWRReport.query.get_or_404(report_id)
     analysis = AWRAnalysisResult.query.get_or_404(analysis_id)
     if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
-        flash('无权查看', 'error')
+        flash(t('no_view_access'), 'error')
         return redirect(url_for('awr.list_reports'))
 
     # Parse JSON fields for template
@@ -929,7 +930,7 @@ def export_analysis(report_id, analysis_id):
     report = AWRReport.query.get_or_404(report_id)
     analysis = AWRAnalysisResult.query.get_or_404(analysis_id)
     if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
-        flash('无权导出', 'error')
+        flash(t('no_export_permission'), 'error')
         return redirect(url_for('awr.list_reports'))
 
     export_data = {
@@ -971,7 +972,7 @@ def export_metrics(report_id):
     """Export report metrics as CSV."""
     report = AWRReport.query.get_or_404(report_id)
     if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
-        flash('无权导出', 'error')
+        flash(t('no_export_permission'), 'error')
         return redirect(url_for('awr.list_reports'))
 
     import csv
@@ -1001,7 +1002,7 @@ def compare_reports():
         report_id_a = request.form.get('report_a', type=int)
         report_id_b = request.form.get('report_b', type=int)
         if not report_id_a or not report_id_b:
-            flash('请选择两份报告进行对比', 'error')
+            flash(t('select_two_reports'), 'error')
             return redirect(url_for('awr.compare_reports'))
         return redirect(url_for('awr.compare_result', id_a=report_id_a, id_b=report_id_b))
 
@@ -1189,7 +1190,7 @@ def _build_comparison(parsed_a, parsed_b, report_a, report_b):
 @login_required
 def delete_report(report_id):
     if not current_user.is_admin:
-        flash('仅管理员可删除', 'error')
+        flash(t('admin_only_delete'), 'error')
         return redirect(url_for('awr.list_reports'))
 
     report = AWRReport.query.get_or_404(report_id)
@@ -1199,5 +1200,5 @@ def delete_report(report_id):
                             detail=report.title, ip_address=request.remote_addr))
     db.session.delete(report)
     db.session.commit()
-    flash('报告已删除', 'success')
+    flash(t('report_deleted'), 'success')
     return redirect(url_for('awr.list_reports'))

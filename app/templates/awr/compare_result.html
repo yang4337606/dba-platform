@@ -1,43 +1,43 @@
 {% extends "base.html" %}
-{% block title %}AWR对比结果{% endblock %}
+{% block title %}{{ _('compare_result_title') }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">AWR报告对比结果</h1>
+    <h1 class="page-title">{{ _('compare_result_heading') }}</h1>
     <div class="page-subtitle">
       #{{ report_a.id }} {{ report_a.title }} vs #{{ report_b.id }} {{ report_b.title }}
     </div>
   </div>
   <div class="btn-group">
-    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary">重新选择</a>
-    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary">{{ _('btn_reselect') }}</a>
+    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">{{ _('btn_back_list') }}</a>
   </div>
 </div>
 
 <!-- Report Info Comparison -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
   <div class="analysis-section">
-    <div class="analysis-header">基准报告 (A)</div>
+    <div class="analysis-header">{{ _('label_baseline_a') }}</div>
     <div class="analysis-body">
       <table>
         <tbody>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">数据库</td><td style="font-size:12px;">{{ report_a.db_name or 'N/A' }}</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">版本</td><td style="font-size:12px;">{{ report_a.db_version or 'N/A' }}</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">采集时长</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_a.elapsed_seconds or 'N/A' }}s</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">快照范围</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_a.snap_begin_id or '?' }} - #{{ report_a.snap_end_id or '?' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('th_database') }}</td><td style="font-size:12px;">{{ report_a.db_name or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_version') }}</td><td style="font-size:12px;">{{ report_a.db_version or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_elapsed') }}</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_a.elapsed_seconds or 'N/A' }}s</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_snap_range') }}</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_a.snap_begin_id or '?' }} - #{{ report_a.snap_end_id or '?' }}</td></tr>
         </tbody>
       </table>
     </div>
   </div>
   <div class="analysis-section">
-    <div class="analysis-header">对比报告 (B)</div>
+    <div class="analysis-header">{{ _('label_compare_b') }}</div>
     <div class="analysis-body">
       <table>
         <tbody>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">数据库</td><td style="font-size:12px;">{{ report_b.db_name or 'N/A' }}</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">版本</td><td style="font-size:12px;">{{ report_b.db_version or 'N/A' }}</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">采集时长</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_b.elapsed_seconds or 'N/A' }}s</td></tr>
-          <tr><td style="font-size:12px;color:var(--text-secondary);">快照范围</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_b.snap_begin_id or '?' }} - #{{ report_b.snap_end_id or '?' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('th_database') }}</td><td style="font-size:12px;">{{ report_b.db_name or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_version') }}</td><td style="font-size:12px;">{{ report_b.db_version or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_elapsed') }}</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_b.elapsed_seconds or 'N/A' }}s</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">{{ _('label_snap_range') }}</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_b.snap_begin_id or '?' }} - #{{ report_b.snap_end_id or '?' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -47,11 +47,11 @@
 <!-- Load Profile Changes -->
 {% if diff.get('load_profile') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9632; 负载概况变化</div>
+  <div class="analysis-header">&#9632; {{ _('section_load_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_report_a') }}</th><th>{{ _('th_report_b') }}</th><th>{{ _('th_change_pct') }}</th></tr></thead>
       <tbody>
       {% for item in diff['load_profile'] %}
       <tr>
@@ -73,11 +73,11 @@
 <!-- Wait Event Changes -->
 {% if diff.get('wait_events') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9670; 等待事件变化</div>
+  <div class="analysis-header">&#9670; {{ _('section_wait_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>事件</th><th>%DB Time (A)</th><th>%DB Time (B)</th><th>变化</th></tr></thead>
+      <thead><tr><th>{{ _('th_event') }}</th><th>%DB Time (A)</th><th>%DB Time (B)</th><th>{{ _('th_change') }}</th></tr></thead>
       <tbody>
       {% for item in diff['wait_events'] %}
       <tr>
@@ -99,11 +99,11 @@
 <!-- Efficiency Changes -->
 {% if diff.get('efficiency') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9679; 实例效率变化</div>
+  <div class="analysis-header">&#9679; {{ _('section_efficiency_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>值 (A)</th><th>值 (B)</th><th>变化</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_value') }} (A)</th><th>{{ _('th_value') }} (B)</th><th>{{ _('th_change') }}</th></tr></thead>
       <tbody>
       {% for item in diff['efficiency'] %}
       <tr>
@@ -125,11 +125,11 @@
 <!-- Key Metrics Summary -->
 {% if diff.get('key_metrics') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9733; 关键指标摘要</div>
+  <div class="analysis-header">&#9733; {{ _('section_key_metrics') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_report_a') }}</th><th>{{ _('th_report_b') }}</th><th>{{ _('th_change_pct') }}</th></tr></thead>
       <tbody>
       {% for item in diff['key_metrics'] %}
       <tr>
@@ -151,11 +151,11 @@
 <!-- Memory Stats Changes -->
 {% if diff.get('memory') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9881; 内存统计变化</div>
+  <div class="analysis-header">&#9881; {{ _('section_memory_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>组件</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <thead><tr><th>{{ _('th_component') }}</th><th>{{ _('th_report_a') }}</th><th>{{ _('th_report_b') }}</th><th>{{ _('th_change_pct') }}</th></tr></thead>
       <tbody>
       {% for item in diff['memory'] %}
       <tr>
@@ -177,11 +177,11 @@
 <!-- IO Stats Changes -->
 {% if diff.get('io_stats') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9660; IO统计变化</div>
+  <div class="analysis-header">&#9660; {{ _('section_io_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_report_a') }}</th><th>{{ _('th_report_b') }}</th><th>{{ _('th_change_pct') }}</th></tr></thead>
       <tbody>
       {% for item in diff['io_stats'] %}
       <tr>
@@ -203,11 +203,11 @@
 <!-- Time Model Changes -->
 {% if diff.get('time_model') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9202; 时间模型变化</div>
+  <div class="analysis-header">&#9202; {{ _('section_time_model_change') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>报告A (s)</th><th>报告B (s)</th><th>变化%</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_report_a') }} (s)</th><th>{{ _('th_report_b') }} (s)</th><th>{{ _('th_change_pct') }}</th></tr></thead>
       <tbody>
       {% for item in diff['time_model'] %}
       <tr>
@@ -229,7 +229,7 @@
 {% if not diff.get('load_profile') and not diff.get('wait_events') and not diff.get('efficiency') and not diff.get('key_metrics') and not diff.get('memory') and not diff.get('io_stats') and not diff.get('time_model') %}
 <div class="analysis-section">
   <div class="analysis-body" style="text-align:center;padding:48px;color:var(--text-secondary);">
-    暂无可对比的指标数据。请确认两份报告均已解析完成。
+    {{ _('empty_compare_data') }}
   </div>
 </div>
 {% endif %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}分析报告 #{{ analysis.id }}{% endblock %}
+{% block title %}{{ _('analysis_report_title', id=analysis.id) }}{% endblock %}
 {% block content %}
 
 {# Extract recommendation sub-fields safely #}
@@ -14,15 +14,15 @@
 
 <div class="page-header">
   <div>
-    <h1 class="page-title">分析报告 #{{ analysis.id }}</h1>
+    <h1 class="page-title">{{ _('analysis_report_title', id=analysis.id) }}</h1>
     <div class="page-subtitle">
       {{ report.title }} &middot; {{ report.db_name or '' }}
-      {% if analysis.analysis_type == 'llm' %}<span class="llm-badge" style="margin-left:8px;">LLM增强</span>{% endif %}
+      {% if analysis.analysis_type == 'llm' %}<span class="llm-badge" style="margin-left:8px;">{{ _('label_llm_enhanced') }}</span>{% endif %}
     </div>
   </div>
   <div class="btn-group">
-    <a href="{{ url_for('awr.export_analysis', report_id=report.id, analysis_id=analysis.id) }}" class="btn btn-secondary">导出JSON</a>
-    <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">返回报告</a>
+    <a href="{{ url_for('awr.export_analysis', report_id=report.id, analysis_id=analysis.id) }}" class="btn btn-secondary">{{ _('btn_export_json') }}</a>
+    <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">{{ _('btn_back_report') }}</a>
   </div>
 </div>
 
@@ -45,15 +45,15 @@
       </svg>
       <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:14px;font-weight:700;">{{ composite_score }}</div>
     </div>
-    <div style="font-size:12px;color:var(--text-secondary);">综合评分</div>
+    <div style="font-size:12px;color:var(--text-secondary);">{{ _('label_composite_score') }}</div>
   </div>
   {% endif %}
   <div>
-    <div style="font-size:18px;font-weight:700;">健康评估</div>
+    <div style="font-size:18px;font-weight:700;">{{ _('label_health_assessment') }}</div>
     <div style="font-size:13px;color:var(--text-secondary);">
-      {% if analysis.health_level == 'healthy' %}数据库运行状态良好
-      {% elif analysis.health_level == 'warning' %}存在需要关注的性能问题
-      {% else %}存在严重性能瓶颈，需要立即处理{% endif %}
+      {% if analysis.health_level == 'healthy' %}{{ _('health_good') }}
+      {% elif analysis.health_level == 'warning' %}{{ _('health_warning') }}
+      {% else %}{{ _('health_serious') }}{% endif %}
     </div>
   </div>
 </div>
@@ -69,8 +69,8 @@
     {{ workload_info.workload_type }}
   </span>
   <div>
-    <div style="font-size:13px;font-weight:600;">负载类型识别
-      <span style="font-size:11px;color:var(--text-muted);font-weight:400;margin-left:6px;">置信度 {{ (workload_info.confidence * 100)|int }}%</span>
+    <div style="font-size:13px;font-weight:600;">{{ _('section_workload_type') }}
+      <span style="font-size:11px;color:var(--text-muted);font-weight:400;margin-left:6px;">{{ _('label_confidence') }} {{ (workload_info.confidence * 100)|int }}%</span>
     </div>
     <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">
       OLTP={{ workload_info.get('oltp_score', 0) }} / OLAP={{ workload_info.get('olap_score', 0) }}
@@ -79,7 +79,7 @@
   </div>
   {% if workload_info.get('signals') %}
   <details style="margin-left:auto;font-size:11px;">
-    <summary style="cursor:pointer;color:var(--text-secondary);">识别依据</summary>
+    <summary style="cursor:pointer;color:var(--text-secondary);">{{ _('label_classification_basis') }}</summary>
     <ul style="margin:6px 0 0 0;padding-left:16px;color:var(--text-secondary);">
       {% for s in workload_info.signals %}<li>{{ s }}</li>{% endfor %}
     </ul>
@@ -91,7 +91,7 @@
 <!-- 2. Summary -->
 {% if analysis.summary %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9632; 概览</div>
+  <div class="analysis-header">&#9632; {{ _('section_overview') }}</div>
   <div class="analysis-body">
     <div style="font-size:13px;line-height:1.8;">{{ analysis.summary }}</div>
   </div>
@@ -101,7 +101,7 @@
 <!-- 3. Problems -->
 {% if problems_list %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9670; 发现问题 ({{ problems_list|length }})</div>
+  <div class="analysis-header">&#9670; {{ _('section_problems_found') }} ({{ problems_list|length }})</div>
   <div class="analysis-body">
     {% for p in problems_list %}
     <div class="finding-item">
@@ -114,7 +114,7 @@
       {% if p.metric_value is not none %}
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-family:var(--font-mono);">
         {{ p.metric_name }}: {{ p.metric_value }} {{ p.metric_unit }}
-        (关注阈值: {{ p.threshold_warning }}, 严重阈值: {{ p.threshold_serious }})
+        ({{ _('label_warning_threshold') }} {{ p.threshold_warning }}, {{ _('label_serious_threshold') }} {{ p.threshold_serious }})
       </div>
       {% endif %}
     </div>
@@ -126,16 +126,16 @@
 <!-- 4. Time Model Breakdown -->
 {% if time_model %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9201; 时间模型分析 ({{ time_model|length }})</div>
+  <div class="analysis-header">&#9201; {{ _('section_time_model_analysis') }} ({{ time_model|length }})</div>
   <div class="analysis-body">
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>组件</th>
-            <th>% DB Time</th>
-            <th>发现</th>
-            <th>严重程度</th>
+            <th>{{ _('th_component') }}</th>
+            <th>{{ _('th_pct_db_time') }}</th>
+            <th>{{ _('th_finding') }}</th>
+            <th>{{ _('th_severity') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -163,7 +163,7 @@
 <!-- 5. Correlation Analysis -->
 {% if correlations %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9733; 关联分析 ({{ correlations|length }})</div>
+  <div class="analysis-header">&#9733; {{ _('section_correlation') }} ({{ correlations|length }})</div>
   <div class="analysis-body">
     {% for c in correlations %}
     <div class="finding-item">
@@ -186,17 +186,17 @@
 <!-- 6. Advisory Recommendations -->
 {% if advisory_recs %}
 <div class="analysis-section">
-  <div class="analysis-header" style="color:var(--warning);">&#9888; Advisory 建议 ({{ advisory_recs|length }})</div>
+  <div class="analysis-header" style="color:var(--warning);">&#9888; {{ _('section_advisory_recommendations') }} ({{ advisory_recs|length }})</div>
   <div class="analysis-body">
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Advisory 类型</th>
-            <th>当前大小</th>
-            <th>建议大小</th>
-            <th>收益说明</th>
-            <th>严重程度</th>
+            <th>{{ _('th_advisory_type') }}</th>
+            <th>{{ _('th_current_size') }}</th>
+            <th>{{ _('th_recommended_size') }}</th>
+            <th>{{ _('th_benefit') }}</th>
+            <th>{{ _('th_severity') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -223,16 +223,16 @@
 <!-- 7. Parameter Recommendations -->
 {% if param_recs %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9881; 参数优化建议 ({{ param_recs|length }})</div>
+  <div class="analysis-header">&#9881; {{ _('section_param_optimization') }} ({{ param_recs|length }})</div>
   <div class="analysis-body">
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>参数</th>
-            <th>建议</th>
-            <th>说明</th>
-            <th>触发条件</th>
+            <th>{{ _('th_parameter') }}</th>
+            <th>{{ _('th_suggestion') }}</th>
+            <th>{{ _('th_description') }}</th>
+            <th>{{ _('th_trigger') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -254,12 +254,12 @@
 <!-- 8. Version Diagnostics -->
 {% if version_notes %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9432; 版本诊断信息 ({{ version_notes|length }})</div>
+  <div class="analysis-header">&#9432; {{ _('section_version_diag') }} ({{ version_notes|length }})</div>
   <div class="analysis-body">
     {% for vn in version_notes %}
     <div class="finding-item" style="background:var(--bg-tertiary);border-radius:8px;padding:12px 16px;">
       <div style="display:flex;align-items:center;gap:8px;">
-        <span class="badge badge-info">版本信息</span>
+        <span class="badge badge-info">{{ _('label_version_info') }}</span>
         <span class="finding-title">{{ vn.title if vn.title is defined else vn }}</span>
       </div>
       {% if vn.description is defined %}
@@ -277,17 +277,17 @@
 <!-- 9. Wait Histogram Analysis -->
 {% if histogram %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9776; 等待直方图分析 ({{ histogram|length }})</div>
+  <div class="analysis-header">&#9776; {{ _('section_histogram_analysis') }} ({{ histogram|length }})</div>
   <div class="analysis-body">
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>等待事件</th>
-            <th>模式</th>
-            <th>P95 Bucket</th>
-            <th>P99 Bucket</th>
-            <th>发现</th>
+            <th>{{ _('th_event') }}</th>
+            <th>{{ _('th_pattern') }}</th>
+            <th>{{ _('th_p95_bucket') }}</th>
+            <th>{{ _('th_p99_bucket') }}</th>
+            <th>{{ _('th_finding') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -311,18 +311,18 @@
 {% if analysis.llm_raw_response %}
 <div class="analysis-section" style="border-color:rgba(168,85,247,0.3);">
   <div class="analysis-header">
-    <span class="llm-badge" style="margin-right:8px;">AI</span> LLM 增强分析
+    <span class="llm-badge" style="margin-right:8px;">AI</span> {{ _('section_llm_analysis') }}
     {% if analysis.llm_provider %}<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">{{ analysis.llm_provider }}</span>{% endif %}
   </div>
   <div class="analysis-body">
     {% if llm_structured and llm_structured.summary %}
     <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:8px;">
-      <div style="font-weight:600;margin-bottom:8px;">AI 摘要</div>
+      <div style="font-weight:600;margin-bottom:8px;">{{ _('label_ai_summary') }}</div>
       <div style="font-size:13px;line-height:1.8;">{{ llm_structured.summary }}</div>
     </div>
     {% if llm_structured.problems %}
     <div style="margin-bottom:16px;">
-      <div style="font-weight:600;margin-bottom:8px;">AI 发现的问题</div>
+      <div style="font-weight:600;margin-bottom:8px;">{{ _('label_ai_problems') }}</div>
       {% for prob in llm_structured.problems %}
       <div class="finding-item">
         <div class="finding-title">{{ prob.title if prob.title else prob }}</div>

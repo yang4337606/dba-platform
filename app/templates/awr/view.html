@@ -5,7 +5,7 @@
   <div>
     <h1 class="page-title">{{ report.title }}</h1>
     <div class="page-subtitle">
-      {{ report.db_name or '未知' }} / {{ report.instance_name or '未知' }}
+      {{ report.db_name or _('label_unknown') }} / {{ report.instance_name or _('label_unknown') }}
       &middot; 快照 #{{ report.snap_begin_id or '?' }} - #{{ report.snap_end_id or '?' }}
     </div>
   </div>
@@ -14,14 +14,14 @@
     <form method="POST" action="{{ url_for('awr.analyze_report', report_id=report.id) }}" style="display:inline-flex;gap:8px;align-items:center;">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <label style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
-        <input type="checkbox" name="use_llm"> LLM增强
+        <input type="checkbox" name="use_llm"> {{ _('label_llm_enhanced') }}
       </label>
-      <button type="submit" class="btn btn-primary">执行分析</button>
+      <button type="submit" class="btn btn-primary">{{ _('btn_run_analysis') }}</button>
     </form>
     {% endif %}
-    <a href="{{ url_for('awr.export_metrics', report_id=report.id) }}" class="btn btn-secondary">导出CSV</a>
-    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary" style="background:var(--accent-secondary,#6366f1);">对比分析</a>
-    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+    <a href="{{ url_for('awr.export_metrics', report_id=report.id) }}" class="btn btn-secondary">{{ _('btn_export_csv') }}</a>
+    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary" style="background:var(--accent-secondary,#6366f1);">{{ _('btn_compare') }}</a>
+    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">{{ _('btn_back_list') }}</a>
   </div>
 </div>
 
@@ -29,30 +29,30 @@
 <div class="stats-grid">
   <div class="stat-card">
     <div class="stat-value" style="font-size:16px;">{{ report.db_name or 'N/A' }}</div>
-    <div class="stat-label">数据库</div>
+    <div class="stat-label">{{ _('th_database') }}</div>
   </div>
   <div class="stat-card">
     <div class="stat-value" style="font-size:16px;">{{ report.instance_name or 'N/A' }}</div>
-    <div class="stat-label">实例</div>
+    <div class="stat-label">{{ _('th_instance') }}</div>
   </div>
   <div class="stat-card">
     <div class="stat-value" style="font-size:16px;">{{ report.db_version or 'N/A' }}</div>
-    <div class="stat-label">版本</div>
+    <div class="stat-label">{{ _('label_version') }}</div>
   </div>
   <div class="stat-card">
     <div class="stat-value" style="font-size:16px;">{{ report.host_name or 'N/A' }}</div>
-    <div class="stat-label">主机</div>
+    <div class="stat-label">{{ _('label_host') }}</div>
   </div>
   <div class="stat-card">
     <div class="stat-value" style="font-size:16px;">{{ report.elapsed_seconds or 'N/A' }}s</div>
-    <div class="stat-label">采集时长</div>
+    <div class="stat-label">{{ _('label_elapsed') }}</div>
   </div>
 </div>
 
 <!-- Top Wait Events -->
 {% if metrics_by_type.get('wait_event') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9670; Top 等待事件 ({{ metrics_by_type['wait_event']|length }})</div>
+  <div class="analysis-header">&#9670; {{ _('section_top_waits') }} ({{ metrics_by_type['wait_event']|length }})</div>
   <div class="analysis-body">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:16px;">
       <div style="position:relative;height:260px;">
@@ -64,7 +64,7 @@
     </div>
     <div class="table-wrap">
     <table>
-      <thead><tr><th>#</th><th>事件名称</th><th>%DB Time</th><th>单位</th><th>平均等待</th></tr></thead>
+      <thead><tr><th>#</th><th>{{ _('th_event_name') }}</th><th>{{ _('th_pct_db_time') }}</th><th>{{ _('th_unit') }}</th><th>{{ _('th_avg_wait') }}</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['wait_event'][:15] %}
       <tr>
@@ -85,11 +85,11 @@
 <!-- Load Profile -->
 {% if metrics_by_type.get('load_profile') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9632; 负载概况</div>
+  <div class="analysis-header">&#9632; {{ _('section_load_profile') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>值</th><th>单位</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_value') }}</th><th>{{ _('th_unit') }}</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['load_profile'][:20] %}
       <tr>
@@ -108,14 +108,14 @@
 <!-- Instance Efficiency -->
 {% if metrics_by_type.get('efficiency') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9679; 实例效率</div>
+  <div class="analysis-header">&#9679; {{ _('section_efficiency') }}</div>
   <div class="analysis-body">
     <div style="position:relative;height:280px;margin-bottom:16px;">
       <canvas id="efficiencyRadarChart"></canvas>
     </div>
     <div class="table-wrap">
     <table>
-      <thead><tr><th>指标</th><th>值(%)</th></tr></thead>
+      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_value_pct') }}</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['efficiency'] %}
       <tr>
@@ -133,11 +133,11 @@
 <!-- Time Model -->
 {% if metrics_by_type.get('time_model') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9202; 时间模型</div>
+  <div class="analysis-header">&#9202; {{ _('section_time_model') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>统计项</th><th>时间(s)</th><th>% DB Time</th></tr></thead>
+      <thead><tr><th>{{ _('th_stat_name') }}</th><th>{{ _('th_time_s') }}</th><th>{{ _('th_pct_db_time') }}</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['time_model'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
@@ -157,11 +157,11 @@
 <!-- Advisory -->
 {% if metrics_by_type.get('advisory') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9881; 建议信息</div>
+  <div class="analysis-header">&#9881; {{ _('section_advisory') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>建议名称</th><th>值</th><th>详情</th></tr></thead>
+      <thead><tr><th>{{ _('th_advisory_name') }}</th><th>{{ _('th_value') }}</th><th>详情</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['advisory'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
@@ -181,11 +181,11 @@
 <!-- Wait Histogram -->
 {% if metrics_by_type.get('wait_histogram') %}
 <div class="analysis-section">
-  <div class="analysis-header">&#9776; 等待直方图</div>
+  <div class="analysis-header">&#9776; {{ _('section_wait_histogram') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
     <table>
-      <thead><tr><th>事件</th><th>&lt;1ms</th><th>1-4ms</th><th>4-16ms</th><th>16-64ms</th><th>64ms-1s</th><th>&gt;1s</th></tr></thead>
+      <thead><tr><th>{{ _('th_event') }}</th><th>&lt;1ms</th><th>1-4ms</th><th>4-16ms</th><th>16-64ms</th><th>64ms-1s</th><th>&gt;1s</th></tr></thead>
       <tbody>
       {% for m in metrics_by_type['wait_histogram'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
@@ -209,7 +209,7 @@
 <!-- Analyses -->
 {% if analyses %}
 <div style="margin-top:24px;">
-  <h3 style="font-size:16px;font-weight:600;margin-bottom:12px;">分析记录</h3>
+  <h3 style="font-size:16px;font-weight:600;margin-bottom:12px;">{{ _('section_analysis_records') }}</h3>
   <div class="table-wrap">
   <table>
     <thead><tr><th>ID</th><th>类型</th><th>健康等级</th><th>分析师</th><th>时间</th><th>操作</th></tr></thead>
@@ -219,7 +219,7 @@
       <td style="font-family:var(--font-mono);">#{{ a.id }}</td>
       <td>
         {% if a.analysis_type == 'llm' or a.analysis_type == 'combined' %}<span class="llm-badge">LLM</span>
-        {% else %}<span class="badge badge-info">自动</span>{% endif %}
+        {% else %}<span class="badge badge-info">{{ _('label_auto') }}</span>{% endif %}
       </td>
       <td>
         <span class="badge badge-{% if a.health_level == 'healthy' %}success{% elif a.health_level == 'warning' %}warning{% else %}danger{% endif %}">
@@ -228,7 +228,7 @@
       </td>
       <td>{{ a.analyst.username if a.analyst else '-' }}</td>
       <td style="font-size:12px;">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-      <td><a href="{{ url_for('awr.view_analysis', report_id=report.id, analysis_id=a.id) }}" class="btn btn-sm btn-primary">查看分析</a></td>
+      <td><a href="{{ url_for('awr.view_analysis', report_id=report.id, analysis_id=a.id) }}" class="btn btn-sm btn-primary">{{ _('btn_view_analysis') }}</a></td>
     </tr>
     {% endfor %}
     </tbody>
@@ -290,7 +290,7 @@
     var ctx = document.getElementById('efficiencyRadarChart');
     if (ctx) new Chart(ctx, {
       type: 'radar',
-      data: { labels: labels, datasets: [{ label: '效率%', data: data, backgroundColor: 'rgba(59,130,246,0.15)', borderColor: '#3b82f6', pointBackgroundColor: '#3b82f6', borderWidth: 2, pointRadius: 3 }] },
+      data: { labels: labels, datasets: [{ label: '{{ _("label_efficiency_pct") }}', data: data, backgroundColor: 'rgba(59,130,246,0.15)', borderColor: '#3b82f6', pointBackgroundColor: '#3b82f6', borderWidth: 2, pointRadius: 3 }] },
       options: Object.assign({}, chartDefaults, { plugins: { legend: { display: false } }, scales: { r: { suggestedMin: 0, suggestedMax: 100, grid: { color: '#1e293b' }, angleLines: { color: '#1e293b' }, pointLabels: { color: '#94a3b8', font: { size: 10 } }, ticks: { color: '#64748b', backdropColor: 'transparent', font: { size: 9 } } } } })
     });
   })();

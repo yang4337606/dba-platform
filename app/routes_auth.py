@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_user, logout_user, login_required, current_user
 from .models import db, User, AuditLog
+from .i18n import t
 
 # Simple in-memory rate limiter for login attempts
 _login_attempts = defaultdict(list)  # ip -> [timestamps]
@@ -44,7 +45,7 @@ def login():
         # Rate limit check
         client_ip = request.remote_addr
         if _is_rate_limited(client_ip):
-            flash('登录尝试过于频繁，请5分钟后再试', 'error')
+            flash(t('rate_limited', minutes=5), 'error')
             return render_template('auth/login.html')
 
         username = request.form.get('username', '').strip()
@@ -62,7 +63,7 @@ def login():
             return redirect(next_page or url_for('main.dashboard'))
         else:
             _record_attempt(client_ip)
-            flash('用户名或密码错误', 'error')
+            flash(t('login_failed'), 'error')
 
     return render_template('auth/login.html')
 

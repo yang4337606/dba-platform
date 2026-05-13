@@ -6,10 +6,11 @@ from flask import Flask, request, session, abort
 from flask_login import LoginManager
 from .config import Config
 from .models import db, User, KnowledgeRule, SystemSetting
+from .i18n import init_i18n, t
 
 login_manager = LoginManager()
 login_manager.login_view = 'auth.login'
-login_manager.login_message = '请先登录'
+login_manager.login_message_category = 'error'
 
 
 @login_manager.user_loader
@@ -27,6 +28,14 @@ def create_app():
 
     db.init_app(app)
     login_manager.init_app(app)
+    init_i18n(app)
+
+    # Lazy login_message so it respects the current request language
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        from flask import flash, redirect, url_for, request as req
+        flash(t('login_required'), 'error')
+        return redirect(url_for('auth.login', next=req.path))
 
     # Simple CSRF protection
     @app.before_request
