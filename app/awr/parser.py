@@ -52,6 +52,13 @@ class AWRParser:
             'background_wait_events': self._extract_background_wait_events(soup),
             'service_statistics': self._extract_service_statistics(soup),
             'instance_recovery_stats': self._extract_instance_recovery_stats(soup),
+            # New sections (v3 - 7 missing AWR chapters)
+            'ash_activity': self._extract_ash_activity(soup),
+            'addm_findings': self._extract_addm_findings(soup),
+            'sql_plan_changes': self._extract_sql_plan_changes(soup),
+            'host_instance_cpu': self._extract_host_instance_cpu(soup),
+            'cache_sizes': self._extract_cache_sizes(soup),
+            'segment_row_lock_itl': self._extract_segment_row_lock_itl(soup),
         }
         # Enrich top_events with wait_class classification
         for evt in result.get('top_events', []):
@@ -305,6 +312,9 @@ class AWRParser:
             ('SQL ordered by Gets', r'SQL\s+ordered\s+by\s+Gets'),
             ('SQL ordered by Reads', r'SQL\s+ordered\s+by\s+Reads'),
             ('SQL ordered by Executions', r'SQL\s+ordered\s+by\s+Executions'),
+            ('SQL ordered by Parse Calls', r'SQL\s+ordered\s+by\s+Parse\s+Calls'),
+            ('SQL ordered by Sharable Memory', r'SQL\s+ordered\s+by\s+Sharable\s+Mem'),
+            ('SQL ordered by Version Count', r'SQL\s+ordered\s+by\s+Version\s+Count'),
         ]
         try:
             for name, pattern in sections:
@@ -474,6 +484,8 @@ class AWRParser:
                 r'Segments\s+by\s+Logical\s+Reads',
                 r'Segments\s+by\s+Physical\s+Reads',
                 r'Segments\s+by\s+Buffer\s+Busy\s+Waits',
+                r'Segments\s+by\s+Row\s+Lock\s+Waits',
+                r'Segments\s+by\s+ITL\s+Waits',
             ]
             for pattern in patterns:
                 table = self._find_table_after(soup, pattern)
@@ -749,6 +761,170 @@ class AWRParser:
         except Exception:
             logger.debug("_extract_instance_recovery_stats failed", exc_info=True)
             return []
+
+    # -----------------------------------------------------------------
+    # NEW PARSER SECTIONS (v3 - 7 missing AWR chapters)
+    # -----------------------------------------------------------------
+
+    def _extract_ash_activity(self, soup) -> dict:
+        """Extract ASH (Active Session History) - Top Activity and Activity Over Time."""
+        result = {}
+        try:
+            # Top Activity table
+            table = self._find_table_after(soup, r'Top\s+Activity|Active\s+Session\s+History')
+            if table:
+                result['top_activity'] = self._parse_table(table)
+            # Activity Over Time table
+            table2 = self._find_table_after(soup, r'Activity\s+Over\s+Time')
+            if table2:
+                result['activity_over_time'] = self._parse_table(table2)
+            # Top Sessions from ASH
+            table3 = self._find_table_after(soup, r'Top\s+Sessions')
+            if table3:
+                result['top_sessions'] = self._parse_table(table3)
+            # Top Blocking Sessions
+            table4 = self._find_table_after(soup, r'Top\s+Blocking\s+Sessions')
+            if table4:
+                result['top_blocking_sessions'] = self._parse_table(table4)
+        except Exception:
+            logger.debug("_extract_ash_activity failed", exc_info=True)
+        return result
+
+    def _extract_addm_findings(self, soup) -> list:
+        """Extract ADDM Findings and Recommendations."""
+        try:
+            findings = []
+            for pattern in [r'ADDM\s+Findings', r'Findings\s+and\s+Recommendations',
+                            r'ADDM\s+(?:Task|Report)']:
+                table = self._find_table_after(soup, pattern)
+                rows = self._parse_table(table)
+                for row in rows:
+                    row['_source'] = 'ADDM'
+                    findings.append(row)
+            # Also try text-based extraction for ADDM findings
+            if not findings:
+                text = soup.get_text()
+                # Look for ADDM finding blocks
+                addm_blocks = re.findall(
+                    r'Finding\s+\d+[:\s]+(.+?)(?=Finding\s+\d+|Recommendation|$)',
+                    text, re.IGNORECASE | re.DOTALL
+                )
+                for i, block in enumerate(addm_blocks[:10]):
+                    findings.append({
+                        'finding_id': i + 1,
+                        'description': block.strip()[:500],
+                        '_source': 'ADDM_text'
+                    })
+            return findings
+        except Exception:
+            logger.debug("_extract_addm_findings failed", exc_info=True)
+            return []
+
+    def _extract_sql_plan_changes(self, soup) -> list:
+        """Extract SQL Plan Changes / Plan Hash Value Changed."""
+        try:
+            result = []
+            for pattern in [r'Plan\s+Hash\s+Value\s+Changed',
+                            r'SQL\s+ordered\s+by.*Plan',
+                            r'Plan\s+Change']:
+                table = self._find_table_after(soup, pattern)
+                rows = self._parse_table(table)
+                for row in rows:
+                    row['_source'] = 'plan_change'
+                    result.append(row)
+            return result
+        except Exception:
+            logger.debug("_extract_sql_plan_changes failed", exc_info=True)
+            return []
+
+    def _extract_host_instance_cpu(self, soup) -> dict:
+        """Extract Host CPU and Instance CPU utilization breakdown."""
+        result = {}
+        try:
+            # Host CPU
+            table = self._find_table_after(soup, r'Host\s+CPU')
+            if table:
+                rows = self._parse_table(table)
+                if rows:
+                    result['host_cpu'] = rows
+                # Also extract from text
+                text = table.get_text()
+                for pat, key in [
+                    (r'%\s*User[:\s]*([\d\.]+)', 'user_pct'),
+                    (r'%\s*System[:\s]*([\d\.]+)', 'system_pct'),
+                    (r'%\s*WIO[:\s]*([\d\.]+)', 'wio_pct'),
+                    (r'%\s*Idle[:\s]*([\d\.]+)', 'idle_pct'),
+                    (r'%\s*Busy[:\s]*([\d\.]+)', 'busy_pct'),
+                    (r'CPUs[:\s]*(\d+)', 'cpus'),
+                    (r'Cores[:\s]*(\d+)', 'cores'),
+                    (r'Sockets[:\s]*(\d+)', 'sockets'),
+                ]:
+                    m = re.search(pat, text, re.IGNORECASE)
+                    if m:
+                        result[key] = self._safe_float(m.group(1))
+            # Instance CPU
+            table2 = self._find_table_after(soup, r'Instance\s+CPU')
+            if table2:
+                rows2 = self._parse_table(table2)
+                if rows2:
+                    result['instance_cpu'] = rows2
+                text2 = table2.get_text()
+                for pat, key in [
+                    (r'%\s*Total\s+CPU[:\s]*([\d\.]+)', 'instance_total_cpu_pct'),
+                    (r'%\s*Busy\s+CPU[:\s]*([\d\.]+)', 'instance_busy_cpu_pct'),
+                    (r'DB\s+Time.*?%[:\s]*([\d\.]+)', 'db_time_pct_of_cpu'),
+                ]:
+                    m = re.search(pat, text2, re.IGNORECASE)
+                    if m:
+                        result[key] = self._safe_float(m.group(1))
+        except Exception:
+            logger.debug("_extract_host_instance_cpu failed", exc_info=True)
+        return result
+
+    def _extract_cache_sizes(self, soup) -> dict:
+        """Extract Cache Sizes at snapshot time."""
+        result = {}
+        try:
+            table = self._find_table_after(soup, r'Cache\s+Sizes')
+            if table:
+                rows = self._parse_table(table)
+                if rows:
+                    result['raw'] = rows
+                # Also extract specific cache sizes from text
+                text = table.get_text()
+                for pat, key in [
+                    (r'Buffer\s+Cache[:\s]*([\d\.,]+)\s*(MB|GB|M|G)', 'buffer_cache'),
+                    (r'Shared\s+Pool\s+Size[:\s]*([\d\.,]+)\s*(MB|GB|M|G)', 'shared_pool'),
+                    (r'Large\s+Pool\s+Size[:\s]*([\d\.,]+)\s*(MB|GB|M|G)', 'large_pool'),
+                    (r'Java\s+Pool\s+Size[:\s]*([\d\.,]+)\s*(MB|GB|M|G)', 'java_pool'),
+                    (r'Streams\s+Pool\s+Size[:\s]*([\d\.,]+)\s*(MB|GB|M|G)', 'streams_pool'),
+                    (r'(?:Std\s+Block\s+Size|Standard\s+Block)[:\s]*([\d\.,]+)\s*(K|KB)', 'std_block_size'),
+                ]:
+                    m = re.search(pat, text, re.IGNORECASE)
+                    if m:
+                        val = self._safe_float(m.group(1))
+                        unit = m.group(2).upper()
+                        if unit.startswith('G'):
+                            val *= 1024  # Normalize to MB
+                        result[key + '_mb'] = val
+        except Exception:
+            logger.debug("_extract_cache_sizes failed", exc_info=True)
+        return result
+
+    def _extract_segment_row_lock_itl(self, soup) -> list:
+        """Extract Segments by Row Lock Waits and ITL Waits."""
+        result = []
+        try:
+            for pattern in [r'Segments?\s+by\s+Row\s+Lock\s+Waits',
+                            r'Segments?\s+by\s+ITL\s+Waits']:
+                table = self._find_table_after(soup, pattern)
+                rows = self._parse_table(table)
+                for row in rows:
+                    row['_source'] = pattern.replace(r'\s+', ' ').replace('\\s+', ' ')
+                    result.append(row)
+        except Exception:
+            logger.debug("_extract_segment_row_lock_itl failed", exc_info=True)
+        return result
 
     def _safe_float(self, val, default=0.0) -> float:
         return _safe_float(val, default)
