@@ -91,12 +91,34 @@
     <table>
       <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_value') }}</th><th>{{ _('th_unit') }}</th></tr></thead>
       <tbody>
-      {% for m in metrics_by_type['load_profile'][:20] %}
-      <tr>
-        <td style="font-size:12px;">{{ m.metric_name }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
-        <td style="font-size:12px;">{{ m.metric_unit }}</td>
-      </tr>
+      {% for m in metrics_by_type['load_profile'] %}
+      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+      {% set inner = extra.get('value') %}
+      {% if inner is mapping %}
+        {% for k, v in inner.items() %}
+        <tr>
+          <td style="font-size:12px;">{{ k }}</td>
+          <td style="font-size:12px;font-family:var(--font-mono);">{{ v }}</td>
+          <td style="font-size:12px;">per sec</td>
+        </tr>
+        {% endfor %}
+      {% elif inner is iterable and inner is not string and inner|length > 0 and inner[0] is mapping %}
+        {% set row_keys = inner[0].keys()|list %}
+        {% for row in inner %}
+        <tr>
+          {% for k in row_keys %}
+          <td style="font-size:12px;font-family:var(--font-mono);">{{ row.get(k, '-') }}</td>
+          {% endfor %}
+          {% if row_keys|length < 3 %}<td></td>{% endif %}
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td style="font-size:12px;">{{ m.metric_name }}</td>
+          <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+          <td style="font-size:12px;">{{ m.metric_unit }}</td>
+        </tr>
+      {% endif %}
       {% endfor %}
       </tbody>
     </table>
@@ -159,21 +181,26 @@
 <div class="analysis-section">
   <div class="analysis-header">&#9881; {{ _('section_advisory') }}</div>
   <div class="analysis-body">
+    {% for m in metrics_by_type['advisory'] %}
+    {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+    {% set rows = extra.get('value', []) if extra.get('value') is iterable else [] %}
+    <h4 style="font-size:13px;margin:12px 0 6px;">{{ m.metric_name }}</h4>
+    {% if rows and rows is iterable and rows|length > 0 and rows[0] is mapping %}
+    {% set row_keys = rows[0].keys()|list %}
     <div class="table-wrap">
     <table>
-      <thead><tr><th>{{ _('th_advisory_name') }}</th><th>{{ _('th_value') }}</th><th>详情</th></tr></thead>
+      <thead><tr>{% for k in row_keys %}<th style="font-size:11px;">{{ k }}</th>{% endfor %}</tr></thead>
       <tbody>
-      {% for m in metrics_by_type['advisory'] %}
-      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
-      <tr>
-        <td style="font-size:12px;">{{ m.metric_name }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
-        <td style="font-size:12px;">{{ extra.get('details', '-') }}</td>
-      </tr>
+      {% for row in rows %}
+      <tr>{% for k in row_keys %}<td style="font-size:12px;font-family:var(--font-mono);">{{ row.get(k, '-') }}</td>{% endfor %}</tr>
       {% endfor %}
       </tbody>
     </table>
     </div>
+    {% else %}
+    <p style="font-size:12px;color:var(--text-secondary);">{{ m.metric_value or '-' }}</p>
+    {% endif %}
+    {% endfor %}
   </div>
 </div>
 {% endif %}
@@ -184,19 +211,17 @@
   <div class="analysis-header">&#9776; {{ _('section_wait_histogram') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
+    {% set first_extra = (metrics_by_type['wait_histogram'][0].extra_json|fromjson) if metrics_by_type['wait_histogram'][0].extra_json else {} %}
+    {% set hist_keys = first_extra.keys()|list %}
     <table>
-      <thead><tr><th>{{ _('th_event') }}</th><th>&lt;1ms</th><th>1-4ms</th><th>4-16ms</th><th>16-64ms</th><th>64ms-1s</th><th>&gt;1s</th></tr></thead>
+      <thead><tr>{% for k in hist_keys %}<th style="font-size:11px;">{{ k }}</th>{% endfor %}</tr></thead>
       <tbody>
       {% for m in metrics_by_type['wait_histogram'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
       <tr>
-        <td style="font-size:12px;">{{ m.metric_name }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('lt_1ms', '-') }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('1_4ms', '-') }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('4_16ms', '-') }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('16_64ms', '-') }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('64ms_1s', '-') }}</td>
-        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('gt_1s', '-') }}</td>
+        {% for k in hist_keys %}
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get(k, '-') }}</td>
+        {% endfor %}
       </tr>
       {% endfor %}
       </tbody>

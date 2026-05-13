@@ -76,9 +76,16 @@ def upload():
             db_info = parsed.get('db_info', {})
             snap_info = parsed.get('snap_info', {})
 
-            # Create AWRReport record
+            # Create AWRReport record – auto-generate title from parsed data
+            auto_title = ''
+            if db_info.get('db_name'):
+                auto_title = db_info['db_name']
+                if db_info.get('instance_name'):
+                    auto_title += f" / {db_info['instance_name']}"
+                if snap_info.get('begin_id') and snap_info.get('end_id'):
+                    auto_title += f" (#{snap_info['begin_id']}-#{snap_info['end_id']})"
             report = AWRReport(
-                title=request.form.get('title') or filename,
+                title=request.form.get('title', '').strip() or auto_title or filename,
                 filename=filename,
                 file_path=filepath,
                 file_size=file_size,
@@ -468,7 +475,7 @@ def _store_list_or_dict(report_id, metric_type, data):
     if isinstance(data, list):
         for row in data:
             name = row.get('name', row.get('stat_name', row.get('latch_name',
-                   row.get('event', row.get('advisory', '')))))
+                   row.get('event', row.get('Event', row.get('advisory', ''))))))
             val = row.get('value', row.get('gets', row.get('waits')))
             metric = AWRMetric(
                 report_id=report_id,
@@ -513,7 +520,7 @@ def _reconstruct_parsed_data(report):
             'end_time': report.snap_end_time.isoformat() if report.snap_end_time else None,
             'elapsed_seconds': report.elapsed_seconds,
         },
-        'load_profile': [],
+        'load_profile': {'raw': [], 'computed': {}},
         'top_events': [],
         'top_sql': {},
         'io_stats': [],
@@ -545,9 +552,13 @@ def _reconstruct_parsed_data(report):
     for m in metrics:
         extra = json.loads(m.extra_json) if m.extra_json else {}
         if m.metric_type == 'load_profile':
-            parsed_data['load_profile'].append(extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value, 'unit': m.metric_unit
-            })
+            # Rebuild load_profile as dict with 'raw' and 'computed' keys
+            if isinstance(extra, dict) and 'name' in extra and 'value' in extra:
+                parsed_data['load_profile'][extra['name']] = extra['value']
+            else:
+                parsed_data['load_profile'][m.metric_name] = extra if extra else {
+                    'name': m.metric_name, 'value': m.metric_value, 'unit': m.metric_unit
+                }
         elif m.metric_type == 'wait_event':
             parsed_data['top_events'].append(extra if extra else {
                 'name': m.metric_name, 'pct_db_time': m.metric_value
@@ -584,9 +595,13 @@ def _reconstruct_parsed_data(report):
                 'name': m.metric_name, 'value': m.metric_value
             })
         elif m.metric_type == 'advisory':
-            parsed_data['advisories'][m.metric_name] = extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value
-            }
+            # Unwrap: extra is {'name': key, 'value': [row_dicts...]}, need to restore the list
+            if isinstance(extra, dict) and isinstance(extra.get('value'), list):
+                parsed_data['advisories'][m.metric_name] = extra['value']
+            else:
+                parsed_data['advisories'].setdefault(m.metric_name, []).append(
+                    extra if extra else {'name': m.metric_name, 'value': m.metric_value}
+                )
         elif m.metric_type == 'enqueue':
             parsed_data['enqueue_activity'].append(extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
