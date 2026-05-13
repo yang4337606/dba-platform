@@ -1,5 +1,8 @@
 """Workload auto-classifier (OLTP / OLAP / MIXED / HTAP)."""
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 from .utils import _safe_float
 
@@ -13,7 +16,7 @@ logger = logging.getLogger(__name__)
 class WorkloadClassifier:
     """Auto-classify database workload as OLTP, OLAP, MIXED, or HTAP based on AWR metrics."""
 
-    def classify(self, parsed_data: dict) -> dict:
+    def classify(self, parsed_data: dict[str, Any]) -> dict[str, Any]:
         """Classify workload type from parsed AWR data.
 
         Returns dict with:
@@ -158,7 +161,7 @@ class WorkloadClassifier:
             'threshold_adjustments': adjustments,
         }
 
-    def _get_threshold_adjustments(self, workload_type: str) -> dict:
+    def _get_threshold_adjustments(self, workload_type: str) -> dict[str, tuple]:
         """Return threshold overrides based on workload type.
 
         Format: metric_key -> (warning_threshold, serious_threshold, unit, direction)
@@ -191,7 +194,7 @@ class WorkloadClassifier:
             }
         return {}
 
-    def _sf(self, val, default=0.0):
+    def _sf(self, val: Any, default: float = 0.0) -> float:
         try:
             if val is None:
                 return default
@@ -200,7 +203,7 @@ class WorkloadClassifier:
             return default
 
 
-def classify_workload(parsed_data: dict) -> dict:
+def classify_workload(parsed_data: dict[str, Any]) -> dict[str, Any]:
     """Convenience function to classify workload type."""
     classifier = WorkloadClassifier()
     return classifier.classify(parsed_data)

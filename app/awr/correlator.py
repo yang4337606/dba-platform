@@ -1,5 +1,8 @@
 """Cross-dimension correlation analyzer."""
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 from .utils import _safe_float
 
@@ -25,7 +28,7 @@ class CorrelationAnalyzer:
          'check': 'physical_reads_sga'},
     ]
 
-    def analyze(self, parsed_data: dict, problems: list) -> list:
+    def analyze(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """Analyze correlations between identified problems and metrics.
         Returns list of correlation findings."""
         if not parsed_data or not problems:
@@ -44,7 +47,7 @@ class CorrelationAnalyzer:
         findings.extend(self._check_composite_patterns(parsed_data, problems))
         return findings
 
-    def _check_io_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_io_sql_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """db file sequential/scattered read high -> check Top SQL buffer gets/reads."""
         findings = []
         io_problems = [p for p in problems if p.get('metric_name', '') and
@@ -80,7 +83,7 @@ class CorrelationAnalyzer:
                 })
         return findings
 
-    def _check_cpu_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_cpu_sql_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """CPU high -> check SQL CPU time and buffer gets."""
         findings = []
         cpu_problems = [p for p in problems if p.get('metric_name', '') and
@@ -108,7 +111,7 @@ class CorrelationAnalyzer:
                 })
         return findings
 
-    def _check_redo_commit_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_redo_commit_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """log file sync high -> check redo size, commit frequency, log file parallel write."""
         findings = []
         log_problems = [p for p in problems if p.get('metric_name', '') and
@@ -142,7 +145,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_parse_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_parse_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """library cache / latch high -> check hard parse ratio."""
         findings = []
         parse_problems = [p for p in problems if p.get('metric_name', '') and
@@ -168,7 +171,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_rac_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_rac_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """gc wait high -> check RAC interconnect and hot SQL."""
         findings = []
         gc_problems = [p for p in problems if p.get('metric_name', '') and
@@ -193,7 +196,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_memory_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_memory_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """Buffer cache hit low -> check physical reads and SGA sizing."""
         findings = []
         mem_problems = [p for p in problems if p.get('metric_name', '') and
@@ -226,7 +229,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_temp_pga_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_temp_pga_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """direct path read/write temp high -> check PGA and sort spills."""
         findings = []
         temp_problems = [p for p in problems if p.get('metric_name', '') and
@@ -262,7 +265,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_lock_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_lock_sql_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """TX row lock / TM contention -> check SQL and segment stats."""
         findings = []
         lock_problems = [p for p in problems if p.get('metric_name', '') and
@@ -303,7 +306,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_os_db_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_os_db_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """OS CPU/memory high -> correlate with DB load."""
         findings = []
         os_problems = [p for p in problems if p.get('metric_name', '') and
@@ -327,7 +330,7 @@ class CorrelationAnalyzer:
             })
         return findings
 
-    def _check_segment_sql_correlation(self, parsed_data: dict, problems: list) -> list:
+    def _check_segment_sql_correlation(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """Hot segment -> correlate with Top SQL accessing that segment."""
         findings = []
         seg_problems = [p for p in problems if p.get('problem_type', '') == 'segment' or
@@ -353,7 +356,7 @@ class CorrelationAnalyzer:
                 })
         return findings
 
-    def _check_composite_patterns(self, parsed_data: dict, problems: list) -> list:
+    def _check_composite_patterns(self, parsed_data: dict[str, Any], problems: list[dict]) -> list[dict]:
         """Detect classic multi-symptom composite patterns from production experience.
 
         Unlike single-dimension correlators, these match on combinations of 3+ symptoms

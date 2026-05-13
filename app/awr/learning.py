@@ -1,8 +1,11 @@
 """Self-learning engine for knowledge rule lifecycle management."""
+from __future__ import annotations
+
 import json
 import re
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +26,8 @@ class LearningEngine:
     ACTIVE_THRESHOLD = 0.65
     REJECT_THRESHOLD = 0.20
 
-    def process_analysis(self, report, problems: list, correlations: list,
-                         llm_patterns: list, db_session):
+    def process_analysis(self, report: Any, problems: list[dict], correlations: list[dict],
+                         llm_patterns: list[dict], db_session: Any) -> None:
         """Process analysis results: update existing rules, create new candidates."""
         from app.models import KnowledgeRule
         matched_rules, unmatched = self._match_rules(problems, db_session)
@@ -36,7 +39,7 @@ class LearningEngine:
         self._create_candidates(unmatched, llm_patterns or [], db_session)
         db_session.flush()
 
-    def _match_rules(self, problems: list, db_session) -> tuple:
+    def _match_rules(self, problems: list[dict], db_session: Any) -> tuple[list, list[dict]]:
         """Match problems against existing knowledge rules.
         Returns (matched_rules, unmatched_problems)."""
         from app.models import KnowledgeRule
@@ -73,7 +76,7 @@ class LearningEngine:
         unmatched = [p for p in problems if p.get('metric_name', '') not in matched_problem_keys]
         return (matched_rules, unmatched)
 
-    def _update_hit_rules(self, matched_rules: list, report, db_session):
+    def _update_hit_rules(self, matched_rules: list, report: Any, db_session: Any) -> None:
         """Boost confidence for matched rules."""
         from app.models import KnowledgeHitLog
         for rule in matched_rules:
@@ -85,7 +88,7 @@ class LearningEngine:
             db_session.add(hit_log)
             self._update_status(rule, db_session)
 
-    def _update_miss_rules(self, all_rules, matched_rule_ids: set, db_session):
+    def _update_miss_rules(self, all_rules: list, matched_rule_ids: set, db_session: Any) -> None:
         """Increment miss streak for unmatched rules, decay if needed."""
         for rule in all_rules:
             if rule.id in matched_rule_ids:
@@ -99,7 +102,7 @@ class LearningEngine:
                 rule.confidence = (rule.confidence or 0) + self.STALE_DECAY
             self._update_status(rule, db_session)
 
-    def _create_candidates(self, unmatched_problems: list, llm_patterns: list, db_session):
+    def _create_candidates(self, unmatched_problems: list[dict], llm_patterns: list[dict], db_session: Any) -> None:
         """Create new candidate rules from unmatched problems and LLM suggestions."""
         from app.models import KnowledgeRule
         # From unmatched problems
@@ -149,7 +152,7 @@ class LearningEngine:
             )
             db_session.add(rule)
 
-    def _update_status(self, rule, db_session):
+    def _update_status(self, rule: Any, db_session: Any) -> None:
         """Update rule status based on confidence thresholds."""
         if rule.source == 'builtin':
             rule.status = 'active'
@@ -172,7 +175,7 @@ class LearningEngine:
             rule.status = 'candidate'
             rule.is_active = False
 
-    def evaluate_conditions(self, conditions_json: str, metrics_context: dict) -> bool:
+    def evaluate_conditions(self, conditions_json: str | list, metrics_context: dict[str, Any]) -> bool:
         """Evaluate structured conditions against current metrics."""
         try:
             if not conditions_json or not metrics_context:

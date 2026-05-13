@@ -1,7 +1,10 @@
 """LLM integration for enhanced AWR analysis."""
+from __future__ import annotations
+
 import json
 import re
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -13,15 +16,15 @@ logger = logging.getLogger(__name__)
 class LLMIntegration:
     """Interface for LLM-enhanced analysis with structured output."""
 
-    def __init__(self, provider='none', api_key='', api_url='', model=''):
+    def __init__(self, provider: str = 'none', api_key: str = '', api_url: str = '', model: str = '') -> None:
         self.provider = provider
         self.api_key = api_key
         self.api_url = api_url
         self.model = model
 
-    def enhance_analysis(self, parsed_data: dict, problems: list, correlations: list,
-                         anti_patterns=None, wait_class_summary=None,
-                         param_recommendations=None) -> dict:
+    def enhance_analysis(self, parsed_data: dict[str, Any], problems: list[dict], correlations: list[dict],
+                         anti_patterns: list[dict] | None = None, wait_class_summary: dict[str, float] | None = None,
+                         param_recommendations: list[dict] | None = None) -> dict[str, Any] | None:
         """Send structured data to LLM for deep analysis.
         Returns dict with: summary, problems, learned_patterns, raw_response"""
         if self.provider == 'none' or not self.api_key:
@@ -38,9 +41,9 @@ class LLMIntegration:
         except Exception as e:
             return {'error': str(e), 'summary': '', 'problems': [], 'learned_patterns': []}
 
-    def _build_prompt(self, parsed_data: dict, problems: list, correlations: list,
-                      anti_patterns=None, wait_class_summary=None,
-                      param_recommendations=None) -> str:
+    def _build_prompt(self, parsed_data: dict[str, Any], problems: list[dict], correlations: list[dict],
+                      anti_patterns: list[dict] | None = None, wait_class_summary: dict[str, float] | None = None,
+                      param_recommendations: list[dict] | None = None) -> str:
         """Build structured prompt for LLM with comprehensive AWR context."""
         db_info = parsed_data.get('db_info', {}) or {}
         snap_info = parsed_data.get('snap_info', {}) or {}
@@ -173,7 +176,7 @@ class LLMIntegration:
         p.append("注意: 只输出合法的JSON，不要用```包裹。")
         return "\n".join(p)
 
-    def _parse_llm_response(self, response_text: str) -> dict:
+    def _parse_llm_response(self, response_text: str) -> dict[str, Any]:
         """Parse LLM response, trying to extract JSON."""
         if not response_text:
             return {'summary': '', 'problems': [], 'learned_patterns': []}

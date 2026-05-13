@@ -1,8 +1,12 @@
 """AWR HTML report parser."""
+from __future__ import annotations
+
 import re
 import json
 import logging
-from bs4 import BeautifulSoup
+from typing import Any
+
+from bs4 import BeautifulSoup, Tag
 
 from .utils import _safe_float, classify_wait_event
 
@@ -12,7 +16,7 @@ logger = logging.getLogger(__name__)
 class AWRParser:
     """Parse Oracle AWR HTML reports and extract structured metrics."""
 
-    def parse(self, html_content: str) -> dict:
+    def parse(self, html_content: str) -> dict[str, Any]:
         """Parse AWR HTML and return structured data dict."""
         try:
             soup = BeautifulSoup(html_content, 'lxml')
@@ -67,7 +71,7 @@ class AWRParser:
                 evt['wait_class'] = classify_wait_event(ename)
         return result
 
-    def _find_table_after(self, soup, pattern):
+    def _find_table_after(self, soup: BeautifulSoup, pattern: str) -> Tag | None:
         """Find the first table element following a header matching pattern."""
         try:
             for tag in soup.find_all(['h2', 'h3', 'h4', 'th', 'td', 'b', 'a', 'span', 'p']):
@@ -82,7 +86,7 @@ class AWRParser:
             logger.debug("_find_table_after failed", exc_info=True)
             return None
 
-    def _parse_table(self, table):
+    def _parse_table(self, table: Tag | None) -> list[dict[str, str]]:
         """Parse an HTML table into list of dicts."""
         if table is None:
             return []
@@ -113,7 +117,7 @@ class AWRParser:
             logger.debug("_parse_table failed", exc_info=True)
             return []
 
-    def _extract_db_info(self, soup) -> dict:
+    def _extract_db_info(self, soup: BeautifulSoup) -> dict[str, str]:
         result = {'db_name': '', 'instance_name': '', 'db_version': '', 'host_name': '', 'platform': ''}
         try:
             # Try regex on full text
@@ -160,7 +164,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_snap_info(self, soup) -> dict:
+    def _extract_snap_info(self, soup: BeautifulSoup) -> dict[str, Any]:
         result = {'begin_id': '', 'end_id': '', 'snap_begin': '', 'snap_end': '',
                   'duration': '', 'elapsed_seconds': 0}
         try:
@@ -228,7 +232,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_load_profile(self, soup) -> list:
+    def _extract_load_profile(self, soup: BeautifulSoup) -> dict[str, Any]:
         try:
             table = self._find_table_after(soup, r'Load Profile')
             rows = self._parse_table(table)
@@ -273,7 +277,7 @@ class AWRParser:
             logger.debug("_extract_load_profile failed", exc_info=True)
             return {'raw': [], 'computed': {}}
 
-    def _extract_top_events(self, soup) -> list:
+    def _extract_top_events(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract Top Timed Events with %DB Time, Avg Wait, Wait Class."""
         try:
             table = self._find_table_after(soup, r'Top\s+(?:5|10)\s+(?:Timed|Foreground)\s+Events|Top\s+Timed\s+Events')
@@ -303,7 +307,7 @@ class AWRParser:
             logger.debug("_extract_top_events failed", exc_info=True)
             return []
 
-    def _extract_top_sql(self, soup) -> dict:
+    def _extract_top_sql(self, soup: BeautifulSoup) -> dict[str, list[dict[str, str]]]:
         """Extract SQL ordered by Elapsed/CPU/Gets/Reads/Executions."""
         result = {}
         sections = [
@@ -326,7 +330,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_io_stats(self, soup) -> list:
+    def _extract_io_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         try:
             table = self._find_table_after(soup, r'IOStat|I/O\s*Stat|Tablespace\s+IO\s+Stats')
             return self._parse_table(table)
@@ -334,7 +338,7 @@ class AWRParser:
             logger.debug("_extract_io_stats failed", exc_info=True)
             return []
 
-    def _extract_memory_stats(self, soup) -> dict:
+    def _extract_memory_stats(self, soup: BeautifulSoup) -> dict[str, Any]:
         result = {}
         try:
             sga_table = self._find_table_after(soup, r'SGA')
@@ -351,7 +355,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_instance_efficiency(self, soup) -> list:
+    def _extract_instance_efficiency(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         try:
             table = self._find_table_after(soup, r'Instance\s+Efficiency\s+Percentages|Instance\s+Efficiency')
             rows = self._parse_table(table)
@@ -381,7 +385,7 @@ class AWRParser:
             logger.debug("_extract_instance_efficiency failed", exc_info=True)
             return []
 
-    def _extract_os_stats(self, soup) -> list:
+    def _extract_os_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         try:
             table = self._find_table_after(soup, r'Operating\s+System\s+Statistics|OS\s+Statistics')
             return self._parse_table(table)
@@ -389,7 +393,7 @@ class AWRParser:
             logger.debug("_extract_os_stats failed", exc_info=True)
             return []
 
-    def _extract_rac_stats(self, soup) -> list:
+    def _extract_rac_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         try:
             table = self._find_table_after(soup, r'RAC\s+Statistics|Global\s+Cache')
             return self._parse_table(table)
@@ -397,7 +401,7 @@ class AWRParser:
             logger.debug("_extract_rac_stats failed", exc_info=True)
             return []
 
-    def _extract_redo_stats(self, soup) -> dict:
+    def _extract_redo_stats(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Redo size, log file sync, log file parallel write stats."""
         result = {'redo_size_per_sec': 0, 'log_switches': 0}
         try:
@@ -435,7 +439,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_parse_stats(self, soup) -> dict:
+    def _extract_parse_stats(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Hard Parse %, Parse Calls, Execute to Parse ratio."""
         result = {'total_parses_per_sec': 0, 'hard_parses_per_sec': 0,
                   'hard_parse_pct': 0, 'execute_to_parse_pct': 0}
@@ -476,7 +480,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_segment_stats(self, soup) -> list:
+    def _extract_segment_stats(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract hot segments (tables, indexes)."""
         result = []
         try:
@@ -502,7 +506,7 @@ class AWRParser:
     # NEW PARSER SECTIONS (v2)
     # -----------------------------------------------------------------
 
-    def _extract_advisories(self, soup) -> dict:
+    def _extract_advisories(self, soup: BeautifulSoup) -> dict[str, list[dict[str, str]]]:
         """Extract Buffer Pool, PGA, Shared Pool, SGA Target advisories."""
         result = {}
         try:
@@ -522,7 +526,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_enqueue_activity(self, soup) -> list:
+    def _extract_enqueue_activity(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Enqueue Activity (lock wait breakdown)."""
         try:
             table = self._find_table_after(soup, r'Enqueue\s+Activity')
@@ -531,7 +535,7 @@ class AWRParser:
             logger.debug("_extract_enqueue_activity failed", exc_info=True)
             return []
 
-    def _extract_latch_detail(self, soup) -> list:
+    def _extract_latch_detail(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract Latch Statistics / Latch Sleep Breakdown."""
         result = []
         try:
@@ -547,7 +551,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_wait_histogram(self, soup) -> list:
+    def _extract_wait_histogram(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Wait Event Histogram (time distribution buckets)."""
         try:
             table = self._find_table_after(soup, r'Wait\s+Event\s+Histogram')
@@ -556,7 +560,7 @@ class AWRParser:
             logger.debug("_extract_wait_histogram failed", exc_info=True)
             return []
 
-    def _extract_undo_stats(self, soup) -> dict:
+    def _extract_undo_stats(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Undo Segment Statistics / Summary."""
         result = {}
         try:
@@ -588,7 +592,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_wait_class_summary(self, soup) -> list:
+    def _extract_wait_class_summary(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Foreground Wait Class summary (if present in AWR)."""
         try:
             table = self._find_table_after(soup, r'(?:Foreground\s+)?Wait\s+Class(?:es)?')
@@ -598,7 +602,7 @@ class AWRParser:
             logger.debug("_extract_wait_class_summary failed", exc_info=True)
             return []
 
-    def _extract_temp_stats(self, soup) -> dict:
+    def _extract_temp_stats(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Temp/Sort segment usage statistics."""
         result = {}
         try:
@@ -632,7 +636,7 @@ class AWRParser:
             pass
         return result
 
-    def _extract_time_model(self, soup) -> dict:
+    def _extract_time_model(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Time Model Statistics (DB Time breakdown by component)."""
         result = {}
         try:
@@ -669,7 +673,7 @@ class AWRParser:
 
     # --- Batch 4: Missing AWR chapter extractors ---
 
-    def _extract_io_profile(self, soup) -> list:
+    def _extract_io_profile(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract IO Profile summary (Read/Write IOPS, throughput, latency)."""
         try:
             table = self._find_table_after(soup, r'IO\s+Profile|IOProfile|I/O\s+Profile')
@@ -680,7 +684,7 @@ class AWRParser:
             logger.debug("_extract_io_profile failed", exc_info=True)
             return []
 
-    def _extract_file_io_stats(self, soup) -> list:
+    def _extract_file_io_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract individual datafile IO statistics."""
         try:
             table = self._find_table_after(soup, r'File\s+IO\s+Stat|Datafile\s+IO|File\s+I/O')
@@ -691,7 +695,7 @@ class AWRParser:
             logger.debug("_extract_file_io_stats failed", exc_info=True)
             return []
 
-    def _extract_dictionary_cache_stats(self, soup) -> list:
+    def _extract_dictionary_cache_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Dictionary Cache (row cache) statistics."""
         try:
             table = self._find_table_after(soup, r'Dictionary\s+Cache\s+Stats|Row\s+Cache')
@@ -702,7 +706,7 @@ class AWRParser:
             logger.debug("_extract_dictionary_cache_stats failed", exc_info=True)
             return []
 
-    def _extract_library_cache_activity(self, soup) -> list:
+    def _extract_library_cache_activity(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Library Cache Activity statistics."""
         try:
             table = self._find_table_after(soup, r'Library\s+Cache\s+Activity')
@@ -713,7 +717,7 @@ class AWRParser:
             logger.debug("_extract_library_cache_activity failed", exc_info=True)
             return []
 
-    def _extract_init_parameters(self, soup) -> list:
+    def _extract_init_parameters(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract non-default Initialization Parameters."""
         try:
             table = self._find_table_after(soup, r'init\.ora\s+Parameters|Initialization\s+Parameters|init\s+Parameters')
@@ -724,7 +728,7 @@ class AWRParser:
             logger.debug("_extract_init_parameters failed", exc_info=True)
             return []
 
-    def _extract_background_wait_events(self, soup) -> list:
+    def _extract_background_wait_events(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract Background Wait Events."""
         try:
             table = self._find_table_after(soup, r'Background\s+Wait\s+Events')
@@ -740,7 +744,7 @@ class AWRParser:
             logger.debug("_extract_background_wait_events failed", exc_info=True)
             return []
 
-    def _extract_service_statistics(self, soup) -> list:
+    def _extract_service_statistics(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Service Statistics."""
         try:
             table = self._find_table_after(soup, r'Service\s+Statistics')
@@ -751,7 +755,7 @@ class AWRParser:
             logger.debug("_extract_service_statistics failed", exc_info=True)
             return []
 
-    def _extract_instance_recovery_stats(self, soup) -> list:
+    def _extract_instance_recovery_stats(self, soup: BeautifulSoup) -> list[dict[str, str]]:
         """Extract Instance Recovery Statistics."""
         try:
             table = self._find_table_after(soup, r'Instance\s+Recovery\s+Stats')
@@ -766,7 +770,7 @@ class AWRParser:
     # NEW PARSER SECTIONS (v3 - 7 missing AWR chapters)
     # -----------------------------------------------------------------
 
-    def _extract_ash_activity(self, soup) -> dict:
+    def _extract_ash_activity(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract ASH (Active Session History) - Top Activity and Activity Over Time."""
         result = {}
         try:
@@ -790,7 +794,7 @@ class AWRParser:
             logger.debug("_extract_ash_activity failed", exc_info=True)
         return result
 
-    def _extract_addm_findings(self, soup) -> list:
+    def _extract_addm_findings(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract ADDM Findings and Recommendations."""
         try:
             findings = []
@@ -820,7 +824,7 @@ class AWRParser:
             logger.debug("_extract_addm_findings failed", exc_info=True)
             return []
 
-    def _extract_sql_plan_changes(self, soup) -> list:
+    def _extract_sql_plan_changes(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract SQL Plan Changes / Plan Hash Value Changed."""
         try:
             result = []
@@ -837,7 +841,7 @@ class AWRParser:
             logger.debug("_extract_sql_plan_changes failed", exc_info=True)
             return []
 
-    def _extract_host_instance_cpu(self, soup) -> dict:
+    def _extract_host_instance_cpu(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Host CPU and Instance CPU utilization breakdown."""
         result = {}
         try:
@@ -881,7 +885,7 @@ class AWRParser:
             logger.debug("_extract_host_instance_cpu failed", exc_info=True)
         return result
 
-    def _extract_cache_sizes(self, soup) -> dict:
+    def _extract_cache_sizes(self, soup: BeautifulSoup) -> dict[str, Any]:
         """Extract Cache Sizes at snapshot time."""
         result = {}
         try:
@@ -911,7 +915,7 @@ class AWRParser:
             logger.debug("_extract_cache_sizes failed", exc_info=True)
         return result
 
-    def _extract_segment_row_lock_itl(self, soup) -> list:
+    def _extract_segment_row_lock_itl(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract Segments by Row Lock Waits and ITL Waits."""
         result = []
         try:
@@ -926,7 +930,7 @@ class AWRParser:
             logger.debug("_extract_segment_row_lock_itl failed", exc_info=True)
         return result
 
-    def _safe_float(self, val, default=0.0) -> float:
+    def _safe_float(self, val: Any, default: float = 0.0) -> float:
         return _safe_float(val, default)
 
 

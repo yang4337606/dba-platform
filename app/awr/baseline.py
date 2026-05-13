@@ -1,6 +1,9 @@
 """Baseline comparison engine."""
+from __future__ import annotations
+
 import re
 import logging
+from typing import Any
 
 from .utils import _safe_float
 from .scorer import MetricScorer
@@ -15,7 +18,7 @@ logger = logging.getLogger(__name__)
 class BaselineComparer:
     """Compare current metrics against historical baselines."""
 
-    def compare(self, report, parsed_data: dict, db_session) -> list:
+    def compare(self, report: Any, parsed_data: dict[str, Any], db_session: Any) -> list[dict]:
         """Compare current metrics to baseline. Returns list of deviation findings."""
         from app.models import AWRBaseline
         deviations = []
@@ -45,7 +48,7 @@ class BaselineComparer:
                 })
         return deviations
 
-    def update_baseline(self, report, parsed_data: dict, db_session):
+    def update_baseline(self, report: Any, parsed_data: dict[str, Any], db_session: Any) -> None:
         """Update running baseline statistics after analysis."""
         from app.models import AWRBaseline
         if not parsed_data or not report:
@@ -82,7 +85,7 @@ class BaselineComparer:
                 db_session.add(baseline)
         db_session.flush()
 
-    def _calculate_deviation(self, current: float, avg: float, max_val: float) -> dict:
+    def _calculate_deviation(self, current: float, avg: float, max_val: float) -> dict[str, Any]:
         """Calculate how much current deviates from baseline."""
         if not avg or avg == 0:
             return {'deviation_pct': 0, 'is_anomaly': False}
@@ -90,7 +93,7 @@ class BaselineComparer:
         is_anomaly = deviation_pct > 50 or (max_val and current > max_val * 1.2)
         return {'deviation_pct': round(deviation_pct, 1), 'is_anomaly': bool(is_anomaly)}
 
-    def _extract_key_metrics(self, parsed_data: dict) -> dict:
+    def _extract_key_metrics(self, parsed_data: dict[str, Any]) -> dict[str, float]:
         """Extract ALL scoreable metrics from parsed data for baseline comparison.
         Reuses MetricScorer.score_all() extraction logic to stay in sync."""
         metrics = {}

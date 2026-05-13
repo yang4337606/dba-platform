@@ -1,6 +1,9 @@
 """SQL anti-pattern detector."""
+from __future__ import annotations
+
 import re
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +145,7 @@ class SQLAntiPatternDetector:
         },
     ]
 
-    def detect(self, sql_text_list: list) -> list:
+    def detect(self, sql_text_list: list[dict | str]) -> list[dict]:
         """Detect anti-patterns in a list of SQL text strings.
         Each item should be a dict with at least 'sql_text' and optionally 'sql_id'.
         Returns list of finding dicts."""
@@ -180,7 +183,7 @@ class SQLAntiPatternDetector:
 
         return findings
 
-    def detect_from_parsed(self, parsed_data: dict) -> list:
+    def detect_from_parsed(self, parsed_data: dict[str, Any]) -> list[dict]:
         """Convenience method: extract SQL text from parsed AWR data and detect."""
         sql_entries = []
         top_sql = parsed_data.get('top_sql', {})

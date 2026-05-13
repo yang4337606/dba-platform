@@ -1,6 +1,9 @@
 """AWR metric scoring engine."""
+from __future__ import annotations
+
 import re
 import logging
+from typing import Any
 
 from .utils import _safe_float
 
@@ -66,12 +69,12 @@ class MetricScorer:
         'os_load_avg': (2.0, 4.0, 'per CPU', 'higher_worse'),
     }
 
-    def __init__(self, custom_thresholds=None):
+    def __init__(self, custom_thresholds: dict[str, tuple] | None = None) -> None:
         self.thresholds = dict(self.DEFAULT_THRESHOLDS)
         if custom_thresholds:
             self.thresholds.update(custom_thresholds)
 
-    def score_metric(self, metric_key: str, value: float) -> dict:
+    def score_metric(self, metric_key: str, value: float) -> dict[str, Any]:
         """Score a single metric. Returns dict with level, evidence, thresholds."""
         if metric_key not in self.thresholds:
             return {'level': 'healthy', 'evidence': '', 'warning_threshold': None, 'serious_threshold': None}
@@ -105,10 +108,10 @@ class MetricScorer:
             'serious_threshold': serious_threshold,
         }
 
-    def _safe_float(self, val, default=0.0):
+    def _safe_float(self, val: Any, default: float = 0.0) -> float:
         return _safe_float(val, default)
 
-    def _get_problem_type(self, metric_key):
+    def _get_problem_type(self, metric_key: str) -> str:
         """Map metric key to problem type category."""
         IO_KEYS = ('db_file_sequential_read_avg_wait', 'db_file_scattered_read_avg_wait',
                     'avg_read_time', 'avg_write_time', 'tablespace_io_pct', 'physical_reads_per_sec')
@@ -149,7 +152,7 @@ class MetricScorer:
             return 'undo_temp'
         return 'other'
 
-    def _get_problem_title(self, metric_key, value, unit):
+    def _get_problem_title(self, metric_key: str, value: float, unit: str) -> str:
         """Generate Chinese title for a problem."""
         titles = {
             # Load
@@ -206,7 +209,7 @@ class MetricScorer:
         }
         return titles.get(metric_key, f'{metric_key} 异常 ({value}{unit})')
 
-    def score_all(self, parsed_data: dict, report=None, threshold_overrides=None) -> list:
+    def score_all(self, parsed_data: dict[str, Any], report: Any = None, threshold_overrides: dict[str, tuple] | None = None) -> list[dict]:
         """Score all extracted metrics. Returns list of problem dicts."""
         if not parsed_data:
             return []

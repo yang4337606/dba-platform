@@ -1,5 +1,8 @@
 """Utility functions for the AWR analysis engine."""
+from __future__ import annotations
+
 import re
+from typing import Any
 
 from .constants import (
     PARAMETER_RECOMMENDATIONS,
@@ -8,7 +11,7 @@ from .constants import (
 )
 
 
-def _safe_float(val, default=0.0):
+def _safe_float(val: Any, default: float = 0.0) -> float:
     """Safely convert a value to float, returning default on failure."""
     if val is None:
         return default
@@ -20,7 +23,7 @@ def _safe_float(val, default=0.0):
         return default
 
 
-def get_parameter_recommendations(problems: list, parsed_data: dict) -> list:
+def get_parameter_recommendations(problems: list[dict], parsed_data: dict[str, Any]) -> list[dict]:
     """Based on identified problems, return relevant Oracle parameter tuning suggestions."""
     recommendations = []
     problem_keywords = set()
@@ -59,7 +62,7 @@ def get_parameter_recommendations(problems: list, parsed_data: dict) -> list:
     return recommendations
 
 
-def get_version_specific_notes(db_version: str) -> list:
+def get_version_specific_notes(db_version: str) -> list[str]:
     """Return version-specific diagnostic notes for the given Oracle version."""
     if not db_version:
         return []
@@ -70,7 +73,7 @@ def get_version_specific_notes(db_version: str) -> list:
     return notes
 
 
-def compute_composite_health_score(problems: list, correlations: list, deviations: list) -> int:
+def compute_composite_health_score(problems: list[dict], correlations: list[dict], deviations: list[dict]) -> int:
     """Compute a 0-100 composite health score (100 = perfectly healthy).
 
     Scoring weights:

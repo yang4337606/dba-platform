@@ -1,5 +1,8 @@
 """Advisory, Time Model, and Wait Histogram analyzers."""
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 from .utils import _safe_float
 
@@ -18,7 +21,7 @@ class AdvisoryAnalyzer:
     memory configuration that balances cost and benefit.
     """
 
-    def analyze(self, advisories: dict) -> list:
+    def analyze(self, advisories: dict[str, list[dict]]) -> list[dict]:
         """Analyze advisory data and return a list of recommendation dicts.
 
         Args:
@@ -58,7 +61,7 @@ class AdvisoryAnalyzer:
 
     # -- Buffer Pool Advisory ------------------------------------------------
 
-    def _analyze_buffer_pool(self, rows: list) -> dict | None:
+    def _analyze_buffer_pool(self, rows: list[dict]) -> dict[str, Any] | None:
         """Find optimal buffer pool size based on physical read factor."""
         if not rows:
             return None
@@ -126,7 +129,7 @@ class AdvisoryAnalyzer:
 
     # -- PGA Advisory --------------------------------------------------------
 
-    def _analyze_pga(self, rows: list) -> dict | None:
+    def _analyze_pga(self, rows: list[dict]) -> dict[str, Any] | None:
         """Find optimal PGA target that eliminates over-allocation."""
         if not rows:
             return None
@@ -190,7 +193,7 @@ class AdvisoryAnalyzer:
 
     # -- Shared Pool Advisory ------------------------------------------------
 
-    def _analyze_shared_pool(self, rows: list) -> dict | None:
+    def _analyze_shared_pool(self, rows: list[dict]) -> dict[str, Any] | None:
         """Find optimal shared pool size maximizing LC Time Saved."""
         if not rows:
             return None
@@ -257,7 +260,7 @@ class AdvisoryAnalyzer:
 
     # -- SGA Target Advisory -------------------------------------------------
 
-    def _analyze_sga_target(self, rows: list) -> dict | None:
+    def _analyze_sga_target(self, rows: list[dict]) -> dict[str, Any] | None:
         """Find the SGA target size that minimizes estimated DB Time."""
         if not rows:
             return None
@@ -349,7 +352,7 @@ class TimeModelAnalyzer:
         ),
     ]
 
-    def analyze(self, time_model: dict, db_time_seconds: float = 0) -> list:
+    def analyze(self, time_model: dict[str, Any], db_time_seconds: float = 0) -> list[dict]:
         """Analyze time model data and return findings.
 
         Args:
@@ -446,7 +449,7 @@ class WaitHistogramAnalyzer:
         ('>= 32ms', 64),  # use 64ms as approximate representative
     ]
 
-    def analyze(self, wait_histogram: list) -> list:
+    def analyze(self, wait_histogram: list[dict]) -> list[dict]:
         """Analyze wait histogram rows and return latency findings.
 
         Args:
@@ -501,7 +504,7 @@ class WaitHistogramAnalyzer:
 
         return findings
 
-    def _percentile_bucket(self, counts: list, total: int, pct: float) -> int:
+    def _percentile_bucket(self, counts: list[int], total: int, pct: float) -> int:
         """Return the bucket index where the cumulative count reaches *pct*%."""
         target = total * pct / 100.0
         cumulative = 0
@@ -512,8 +515,8 @@ class WaitHistogramAnalyzer:
         return len(counts) - 1
 
     def _detect_pattern(
-        self, event: str, pcts: list, p99_idx: int,
-    ) -> tuple:
+        self, event: str, pcts: list[float], p99_idx: int,
+    ) -> tuple[str, str, str]:
         """Detect distribution pattern and return (pattern, finding, severity).
 
         Returns:
@@ -569,7 +572,7 @@ class WaitHistogramAnalyzer:
 
 # -- Convenience functions ---------------------------------------------------
 
-def get_advisory_recommendations(advisories: dict) -> list:
+def get_advisory_recommendations(advisories: dict[str, list[dict]]) -> list[dict]:
     """Convenience function to get advisory recommendations.
 
     Args:
@@ -583,7 +586,7 @@ def get_advisory_recommendations(advisories: dict) -> list:
     return analyzer.analyze(advisories)
 
 
-def get_time_model_findings(time_model: dict, db_time_seconds: float = 0) -> list:
+def get_time_model_findings(time_model: dict[str, Any], db_time_seconds: float = 0) -> list[dict]:
     """Convenience function to get time model analysis findings.
 
     Args:
@@ -598,7 +601,7 @@ def get_time_model_findings(time_model: dict, db_time_seconds: float = 0) -> lis
     return analyzer.analyze(time_model, db_time_seconds)
 
 
-def get_wait_histogram_findings(wait_histogram: list) -> list:
+def get_wait_histogram_findings(wait_histogram: list[dict]) -> list[dict]:
     """Convenience function to get wait histogram analysis findings.
 
     Args:
