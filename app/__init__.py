@@ -76,7 +76,7 @@ def create_app():
 
 def _seed_defaults(app):
     """Create default admin user and seed/sync knowledge rules."""
-    from .awr_engine import BUILTIN_RULES, BUILTIN_RULES_VERSION
+    from .awr import BUILTIN_RULES, BUILTIN_RULES_VERSION
 
     # Default admin
     if not User.query.filter_by(username='admin').first():

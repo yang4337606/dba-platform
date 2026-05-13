@@ -5,12 +5,12 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from .models import db, AWRReport, AWRMetric, AWRProblem, AWRAnalysisResult, KnowledgeRule, AuditLog, SystemSetting
-from .awr_engine import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer,
-                         LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event,
-                         get_parameter_recommendations, get_version_specific_notes,
-                         compute_composite_health_score,
-                         AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer,
-                         WorkloadClassifier)
+from .awr import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer,
+                   LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event,
+                   get_parameter_recommendations, get_version_specific_notes,
+                   compute_composite_health_score,
+                   AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer,
+                   WorkloadClassifier)
 
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
