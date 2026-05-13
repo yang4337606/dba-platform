@@ -16,7 +16,7 @@ awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
 
 def _allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ('html', 'htm', 'txt')
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ('html', 'htm')
 
 
 @awr_bp.route('/')
@@ -44,7 +44,7 @@ def upload():
             return redirect(request.url)
 
         if not _allowed_file(file.filename):
-            flash('仅支持 HTML/HTM/TXT 格式的AWR报告', 'error')
+            flash('仅支持 HTML/HTM 格式的AWR报告（文本格式暂不支持）', 'error')
             return redirect(request.url)
 
         filename = secure_filename(file.filename)
@@ -82,8 +82,8 @@ def upload():
                 platform=db_info.get('platform', ''),
                 snap_begin_id=snap_info.get('begin_id'),
                 snap_end_id=snap_info.get('end_id'),
-                snap_begin_time=snap_info.get('begin_time'),
-                snap_end_time=snap_info.get('end_time'),
+                snap_begin_time=snap_info.get('snap_begin') or snap_info.get('begin_time'),
+                snap_end_time=snap_info.get('snap_end') or snap_info.get('end_time'),
                 elapsed_seconds=snap_info.get('elapsed_seconds'),
                 raw_html=html_content,
                 upload_user_id=current_user.id,
@@ -166,15 +166,25 @@ def _store_metrics(report_id, parsed):
         )
         db.session.add(metric)
 
-    # top_sql section
-    top_sql = parsed.get('top_sql', [])
-    for idx, sql_entry in enumerate(top_sql):
+    # top_sql section -- parser returns dict {section_name: [rows]} or list
+    top_sql = parsed.get('top_sql', {})
+    sql_entries_flat = []
+    if isinstance(top_sql, dict):
+        for section_name, sql_list in top_sql.items():
+            if isinstance(sql_list, list):
+                for entry in sql_list:
+                    if isinstance(entry, dict):
+                        entry['_section'] = section_name
+                        sql_entries_flat.append(entry)
+    elif isinstance(top_sql, list):
+        sql_entries_flat = top_sql
+    for idx, sql_entry in enumerate(sql_entries_flat):
         metric = AWRMetric(
             report_id=report_id,
             metric_type='sql_stat',
-            metric_name=sql_entry.get('sql_id', f'sql_rank_{idx + 1}'),
+            metric_name=sql_entry.get('sql_id', sql_entry.get('SQL Id', f'sql_rank_{idx + 1}')),
             metric_value=sql_entry.get('elapsed_time') or sql_entry.get('cpu_time') or sql_entry.get('buffer_gets'),
-            metric_text=sql_entry.get('sql_text', ''),
+            metric_text=sql_entry.get('sql_text', sql_entry.get('SQL Text', '')),
             rank_order=idx + 1,
             extra_json=json.dumps(sql_entry, ensure_ascii=False),
         )
@@ -480,7 +490,7 @@ def _reconstruct_parsed_data(report):
         },
         'load_profile': [],
         'top_events': [],
-        'top_sql': [],
+        'top_sql': {},
         'io_stats': [],
         'memory_stats': [],
         'instance_efficiency': {},
@@ -512,7 +522,8 @@ def _reconstruct_parsed_data(report):
         elif m.metric_type == 'sql_stat':
             entry = extra if extra else {'sql_id': m.metric_name}
             entry['sql_text'] = m.metric_text or entry.get('sql_text', '')
-            parsed_data['top_sql'].append(entry)
+            section = entry.pop('_section', 'SQL ordered by Elapsed Time')
+            parsed_data['top_sql'].setdefault(section, []).append(entry)
         elif m.metric_type == 'io_stat':
             parsed_data['io_stats'].append(extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
@@ -578,7 +589,9 @@ def _reconstruct_parsed_data(report):
 
     # Sort ordered items
     parsed_data['top_events'].sort(key=lambda x: x.get('pct_db_time', x.get('pct', 0)) or 0, reverse=True)
-    parsed_data['top_sql'].sort(key=lambda x: x.get('rank_order', x.get('elapsed_time', 0)) or 0)
+    # Sort each SQL section list individually
+    for _section_key, _sql_list in parsed_data['top_sql'].items():
+        _sql_list.sort(key=lambda x: x.get('rank_order', x.get('elapsed_time', 0)) or 0)
 
     return parsed_data
 
@@ -930,6 +943,18 @@ def _build_comparison(parsed_a, parsed_b, report_a, report_b):
             'value_b': val_b,
             'change': round(val_b - val_a, 1),
         })
+
+    # Build key_metrics summary from the most significant changes
+    KEY_METRICS_NAMES = {
+        'db_time', 'db_cpu', 'physical_reads', 'logical_reads',
+        'redo_size', 'transactions', 'executes', 'hard_parses',
+    }
+    for item in diff['load_profile']:
+        metric_key = item.get('metric', '')
+        if metric_key in KEY_METRICS_NAMES or abs(item.get('change_pct', 0)) > 20:
+            diff['key_metrics'].append(item)
+    # Sort by absolute change descending
+    diff['key_metrics'].sort(key=lambda x: abs(x.get('change_pct', 0)), reverse=True)
 
     return diff
 

@@ -1,7 +1,16 @@
 from datetime import datetime
+from urllib.parse import urlparse
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_user, logout_user, login_required, current_user
 from .models import db, User, AuditLog
+
+
+def _is_safe_redirect_url(target):
+    """Validate that the redirect target is a relative URL (no open redirect)."""
+    if not target:
+        return False
+    parsed = urlparse(target)
+    return parsed.scheme == '' and parsed.netloc == ''
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -22,6 +31,8 @@ def login():
             db.session.add(AuditLog(user_id=user.id, action='login', ip_address=request.remote_addr))
             db.session.commit()
             next_page = request.args.get('next')
+            if not _is_safe_redirect_url(next_page):
+                next_page = None
             return redirect(next_page or url_for('main.dashboard'))
         else:
             flash('用户名或密码错误', 'error')

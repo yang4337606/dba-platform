@@ -45,10 +45,18 @@ def add_entry():
         return redirect(url_for('knowledge.list_entries'))
 
     if request.method == 'POST':
+        # Validate conditions_json is valid JSON
+        conditions_raw = request.form.get('conditions_json', '[]')
+        try:
+            json.loads(conditions_raw)
+        except (json.JSONDecodeError, TypeError):
+            flash('条件JSON格式无效，请检查输入', 'error')
+            return render_template('knowledge/edit.html', entry=None)
+
         entry = KnowledgeRule(
             name=request.form.get('name', ''),
             category=request.form.get('category', 'general'),
-            conditions_json=request.form.get('conditions_json', '[]'),
+            conditions_json=conditions_raw,
             root_cause=request.form.get('root_cause', ''),
             solution=request.form.get('solution', ''),
             severity=request.form.get('severity', 'medium'),
@@ -76,9 +84,17 @@ def edit_entry(entry_id):
 
     entry = KnowledgeRule.query.get_or_404(entry_id)
     if request.method == 'POST':
+        # Validate conditions_json is valid JSON
+        conditions_raw = request.form.get('conditions_json', entry.conditions_json)
+        try:
+            json.loads(conditions_raw)
+        except (json.JSONDecodeError, TypeError):
+            flash('条件JSON格式无效，请检查输入', 'error')
+            return render_template('knowledge/edit.html', entry=entry)
+
         entry.name = request.form.get('name', entry.name)
         entry.category = request.form.get('category', entry.category)
-        entry.conditions_json = request.form.get('conditions_json', entry.conditions_json)
+        entry.conditions_json = conditions_raw
         entry.root_cause = request.form.get('root_cause', entry.root_cause)
         entry.solution = request.form.get('solution', entry.solution)
         entry.severity = request.form.get('severity', entry.severity)

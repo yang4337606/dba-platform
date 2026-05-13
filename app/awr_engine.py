@@ -1378,10 +1378,12 @@ class AdvisoryAnalyzer:
                 size = float(row.get('Shared Pool Size(M)', 0))
                 lc_time = float(row.get('Estd LC Time Saved (s)', 0))
                 lc_hits = float(row.get('Estd LC Memory Object Hits', 0))
+                size_factor = float(row.get('Size Factor', row.get('Shared Pool Size Factor', 0)))
                 parsed.append({
                     'size_mb': size,
                     'lc_time_saved': lc_time,
                     'lc_hits': lc_hits,
+                    'size_factor': size_factor,
                     'raw': row,
                 })
             except (ValueError, TypeError):
@@ -1392,8 +1394,12 @@ class AdvisoryAnalyzer:
 
         parsed.sort(key=lambda r: r['size_mb'])
 
-        # Current is assumed to be the first entry or mid-range entry
+        # Find current configuration (Size Factor = 1.0), fallback to first entry
         current = parsed[0]
+        for p in parsed:
+            if abs(p.get('size_factor', 0) - 1.0) < 0.01:
+                current = p
+                break
 
         # Find optimal: maximize LC Time Saved with good LC Hits
         best = max(parsed, key=lambda r: r['lc_time_saved'])
@@ -1438,7 +1444,8 @@ class AdvisoryAnalyzer:
             try:
                 size = float(row.get('SGA Target Size (M)', 0))
                 db_time = float(row.get('Estd DB Time (s)', 0))
-                parsed.append({'size_mb': size, 'db_time': db_time, 'raw': row})
+                size_factor = float(row.get('SGA Size Factor', row.get('Size Factor', 0)))
+                parsed.append({'size_mb': size, 'db_time': db_time, 'size_factor': size_factor, 'raw': row})
             except (ValueError, TypeError):
                 continue
 
@@ -1447,7 +1454,12 @@ class AdvisoryAnalyzer:
 
         parsed.sort(key=lambda r: r['size_mb'])
 
+        # Find current configuration (Size Factor = 1.0), fallback to first entry
         current = parsed[0]
+        for p in parsed:
+            if abs(p.get('size_factor', 0) - 1.0) < 0.01:
+                current = p
+                break
         best = min(parsed, key=lambda r: r['db_time'])
 
         if best['size_mb'] <= current['size_mb']:
@@ -1981,6 +1993,7 @@ def classify_workload(parsed_data: dict) -> dict:
 # WAIT EVENT CLASSIFICATION (Oracle Wait Class Knowledge Base)
 # ---------------------------------------------------------------------------
 
+# Keys are stored in lowercase for consistent lookup in classify_wait_event().
 WAIT_EVENT_CLASS = {
     # User I/O
     'db file sequential read': 'User I/O',
@@ -2003,7 +2016,7 @@ WAIT_EVENT_CLASS = {
     'control file parallel write': 'System I/O',
     'log file sequential read': 'System I/O',
     'log file single write': 'System I/O',
-    'LGWR-LNS wait on channel': 'System I/O',
+    'lgwr-lns wait on channel': 'System I/O',
     'cell smart file creation': 'System I/O',
     # Commit
     'log file sync': 'Commit',
@@ -2018,36 +2031,35 @@ WAIT_EVENT_CLASS = {
     'library cache pin': 'Concurrency',
     'library cache lock': 'Concurrency',
     'library cache load lock': 'Concurrency',
-    'cursor: pin S': 'Concurrency',
-    'cursor: pin S wait on X': 'Concurrency',
-    'cursor: mutex S': 'Concurrency',
-    'cursor: mutex X': 'Concurrency',
+    'cursor: pin s': 'Concurrency',
+    'cursor: pin s wait on x': 'Concurrency',
+    'cursor: mutex s': 'Concurrency',
+    'cursor: mutex x': 'Concurrency',
     'row cache lock': 'Concurrency',
     'log buffer space': 'Concurrency',
-    'enq: HW - contention': 'Concurrency',
-    'enq: ST - contention': 'Concurrency',
+    'enq: hw - contention': 'Concurrency',
+    'enq: st - contention': 'Concurrency',
     'gc buffer busy acquire': 'Concurrency',
     'gc buffer busy release': 'Concurrency',
     # Application
-    'enq: TX - row lock contention': 'Application',
-    'enq: TX - index contention': 'Application',
-    'enq: TX - allocate ITL entry': 'Application',
-    'enq: TM - contention': 'Application',
-    'enq: UL - contention': 'Application',
-    'SQL*Net break/reset to client': 'Application',
+    'enq: tx - row lock contention': 'Application',
+    'enq: tx - index contention': 'Application',
+    'enq: tx - allocate itl entry': 'Application',
+    'enq: tm - contention': 'Application',
+    'enq: ul - contention': 'Application',
+    'sql*net break/reset to client': 'Application',
     # Network
-    'SQL*Net message from client': 'Idle',
-    'SQL*Net message to client': 'Network',
-    'SQL*Net more data from client': 'Network',
-    'SQL*Net more data to client': 'Network',
-    'SQL*Net message from dblink': 'Network',
+    'sql*net message to client': 'Network',
+    'sql*net more data from client': 'Network',
+    'sql*net more data to client': 'Network',
+    'sql*net message from dblink': 'Network',
     # Configuration
     'log file switch completion': 'Configuration',
     'log file switch (checkpoint incomplete)': 'Configuration',
     'log file switch (archiving needed)': 'Configuration',
     'log file switch (private strand flush incomplete)': 'Configuration',
     'resmgr:cpu quantum': 'Configuration',
-    'enq: US - contention': 'Configuration',
+    'enq: us - contention': 'Configuration',
     'os thread startup': 'Configuration',
     # Cluster / RAC
     'gc cr block receive time': 'Cluster',
@@ -2063,18 +2075,18 @@ WAIT_EVENT_CLASS = {
     'ges inquiry response': 'Cluster',
     'cell interconnect retransmit': 'Cluster',
     # Idle (filtered from analysis)
-    'SQL*Net message from client': 'Idle',
-    'PX Deq: Execution Msg': 'Idle',
-    'PX Deq: Table Q Normal': 'Idle',
-    'Streams AQ: waiting for messages in the queue': 'Idle',
+    'sql*net message from client': 'Idle',
+    'px deq: execution msg': 'Idle',
+    'px deq: table q normal': 'Idle',
+    'streams aq: waiting for messages in the queue': 'Idle',
     'wait for unread message on broadcast channel': 'Idle',
     'class slave wait': 'Idle',
     'rdbms ipc message': 'Idle',
     'pmon timer': 'Idle',
     'smon timer': 'Idle',
-    'DIAG idle wait': 'Idle',
+    'diag idle wait': 'Idle',
     'jobq slave wait': 'Idle',
-    'Space Manager: slave idle wait': 'Idle',
+    'space manager: slave idle wait': 'Idle',
 }
 
 # Reverse map: wait class -> set of events (for aggregate analysis)
