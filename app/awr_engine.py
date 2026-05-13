@@ -694,6 +694,297 @@ BUILTIN_RULES = [
     },
 ]
 
+# Current knowledge version – bump when BUILTIN_RULES change so
+# _seed_defaults can detect the need for an incremental sync.
+BUILTIN_RULES_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# WAIT EVENT CLASSIFICATION (Oracle Wait Class Knowledge Base)
+# ---------------------------------------------------------------------------
+
+WAIT_EVENT_CLASS = {
+    # User I/O
+    'db file sequential read': 'User I/O',
+    'db file scattered read': 'User I/O',
+    'direct path read': 'User I/O',
+    'direct path read temp': 'User I/O',
+    'direct path write': 'User I/O',
+    'direct path write temp': 'User I/O',
+    'read by other session': 'User I/O',
+    'db file parallel read': 'User I/O',
+    'cell single block physical read': 'User I/O',
+    'cell multiblock physical read': 'User I/O',
+    # System I/O
+    'log file parallel write': 'System I/O',
+    'db file parallel write': 'System I/O',
+    'control file sequential read': 'System I/O',
+    'control file parallel write': 'System I/O',
+    'log file sequential read': 'System I/O',
+    'log file single write': 'System I/O',
+    'LGWR-LNS wait on channel': 'System I/O',
+    # Commit
+    'log file sync': 'Commit',
+    # Concurrency
+    'buffer busy waits': 'Concurrency',
+    'free buffer waits': 'Concurrency',
+    'latch: shared pool': 'Concurrency',
+    'latch: cache buffers chains': 'Concurrency',
+    'latch: library cache': 'Concurrency',
+    'latch: cache buffers lru chain': 'Concurrency',
+    'latch free': 'Concurrency',
+    'library cache pin': 'Concurrency',
+    'library cache lock': 'Concurrency',
+    'library cache load lock': 'Concurrency',
+    'cursor: pin S': 'Concurrency',
+    'cursor: pin S wait on X': 'Concurrency',
+    'cursor: mutex S': 'Concurrency',
+    'cursor: mutex X': 'Concurrency',
+    'row cache lock': 'Concurrency',
+    'log buffer space': 'Concurrency',
+    'enq: HW - contention': 'Concurrency',
+    'enq: ST - contention': 'Concurrency',
+    'gc buffer busy acquire': 'Concurrency',
+    'gc buffer busy release': 'Concurrency',
+    # Application
+    'enq: TX - row lock contention': 'Application',
+    'enq: TX - index contention': 'Application',
+    'enq: TX - allocate ITL entry': 'Application',
+    'enq: TM - contention': 'Application',
+    'enq: UL - contention': 'Application',
+    'SQL*Net break/reset to client': 'Application',
+    # Network
+    'SQL*Net message from client': 'Idle',
+    'SQL*Net message to client': 'Network',
+    'SQL*Net more data from client': 'Network',
+    'SQL*Net more data to client': 'Network',
+    'SQL*Net message from dblink': 'Network',
+    # Configuration
+    'log file switch completion': 'Configuration',
+    'log file switch (checkpoint incomplete)': 'Configuration',
+    'log file switch (archiving needed)': 'Configuration',
+    'log file switch (private strand flush incomplete)': 'Configuration',
+    'resmgr:cpu quantum': 'Configuration',
+    'enq: US - contention': 'Configuration',
+    'os thread startup': 'Configuration',
+    # Cluster / RAC
+    'gc cr block receive time': 'Cluster',
+    'gc cr grant 2-way': 'Cluster',
+    'gc cr grant congested': 'Cluster',
+    'gc current block receive time': 'Cluster',
+    'gc current grant 2-way': 'Cluster',
+    'gc current grant congested': 'Cluster',
+    'gc cr block busy': 'Cluster',
+    'gc current block busy': 'Cluster',
+    'gc remaster': 'Cluster',
+    'gc cr multi block request': 'Cluster',
+    'ges inquiry response': 'Cluster',
+    # Idle (filtered from analysis)
+    'SQL*Net message from client': 'Idle',
+    'PX Deq: Execution Msg': 'Idle',
+    'PX Deq: Table Q Normal': 'Idle',
+    'Streams AQ: waiting for messages in the queue': 'Idle',
+    'wait for unread message on broadcast channel': 'Idle',
+    'class slave wait': 'Idle',
+    'rdbms ipc message': 'Idle',
+    'pmon timer': 'Idle',
+    'smon timer': 'Idle',
+    'DIAG idle wait': 'Idle',
+    'jobq slave wait': 'Idle',
+    'Space Manager: slave idle wait': 'Idle',
+}
+
+# Reverse map: wait class -> set of events (for aggregate analysis)
+WAIT_CLASS_EVENTS = {}
+for _evt, _cls in WAIT_EVENT_CLASS.items():
+    WAIT_CLASS_EVENTS.setdefault(_cls, set()).add(_evt)
+
+
+def classify_wait_event(event_name: str) -> str:
+    """Return Oracle wait class for an event name. Falls back to 'Other'."""
+    if not event_name:
+        return 'Other'
+    lower = event_name.strip().lower()
+    # Exact match first
+    if lower in WAIT_EVENT_CLASS:
+        return WAIT_EVENT_CLASS[lower]
+    # Prefix/substring match
+    for pattern, cls in WAIT_EVENT_CLASS.items():
+        if pattern in lower or lower in pattern:
+            return cls
+    # Heuristic fallback
+    if lower.startswith('enq:'):
+        return 'Application'
+    if lower.startswith('gc ') or lower.startswith('ges '):
+        return 'Cluster'
+    if lower.startswith('latch'):
+        return 'Concurrency'
+    if lower.startswith('cursor:'):
+        return 'Concurrency'
+    return 'Other'
+
+
+# ---------------------------------------------------------------------------
+# SQL ANTI-PATTERN DETECTOR
+# ---------------------------------------------------------------------------
+
+class SQLAntiPatternDetector:
+    """Detect common SQL anti-patterns from SQL text extracted from AWR."""
+
+    # Each pattern: (name, regex/callable, severity, description, suggestion)
+    PATTERNS = [
+        {
+            'name': 'SELECT_STAR',
+            'pattern': r'\bSELECT\s+\*\s+FROM\b',
+            'severity': 'medium',
+            'description': 'SELECT * 查询所有列，增加不必要的I/O和网络传输',
+            'suggestion': '明确指定需要的列名，减少数据传输和Buffer Gets',
+        },
+        {
+            'name': 'NO_WHERE_CLAUSE',
+            'pattern': r'\bSELECT\b.+?\bFROM\b\s+\w+\s*(?:$|;|\)|ORDER|GROUP|HAVING|UNION)',
+            'severity': 'high',
+            'description': '查询缺少WHERE条件，可能导致全表扫描',
+            'suggestion': '添加合适的WHERE条件限制返回行数',
+        },
+        {
+            'name': 'LEADING_WILDCARD_LIKE',
+            'pattern': r"\bLIKE\s+'%[^']+",
+            'severity': 'high',
+            'description': "LIKE '%xxx' 前导通配符导致索引失效，必须全表扫描",
+            'suggestion': '改用全文索引(Oracle Text)或反转字符串索引，避免前导%',
+        },
+        {
+            'name': 'FUNCTION_ON_INDEX_COLUMN',
+            'pattern': r'\b(?:TO_CHAR|TO_DATE|TO_NUMBER|TRUNC|UPPER|LOWER|NVL|SUBSTR|TRIM|DECODE)\s*\([^)]*\)\s*=',
+            'severity': 'high',
+            'description': '函数包裹索引列导致索引失效(隐式全扫描)',
+            'suggestion': '创建函数索引，或改写条件避免对列施加函数',
+        },
+        {
+            'name': 'NOT_IN_SUBQUERY',
+            'pattern': r'\bNOT\s+IN\s*\(\s*SELECT\b',
+            'severity': 'medium',
+            'description': 'NOT IN子查询在有NULL值时语义可能错误，且性能差',
+            'suggestion': '改用NOT EXISTS或LEFT JOIN ... IS NULL',
+        },
+        {
+            'name': 'CARTESIAN_JOIN',
+            'pattern': r'\bFROM\b\s+\w+\s*,\s*\w+(?:\s*,\s*\w+)*\s+WHERE\b(?:(?!(?:\w+\.\w+\s*=\s*\w+\.\w+)).)*$',
+            'severity': 'high',
+            'description': '可能存在笛卡尔积(Cartesian Join)，缺少表关联条件',
+            'suggestion': '检查FROM子句中多表是否都有正确的JOIN条件',
+        },
+        {
+            'name': 'UNION_INSTEAD_OF_UNION_ALL',
+            'pattern': r'\bUNION\b(?!\s+ALL\b)',
+            'severity': 'low',
+            'description': 'UNION 会执行去重排序(SORT UNIQUE)，如果不需要去重应使用 UNION ALL',
+            'suggestion': '确认是否需要去重，不需要则改为 UNION ALL 避免排序开销',
+        },
+        {
+            'name': 'ORDER_BY_WITHOUT_LIMIT',
+            'pattern': r'\bORDER\s+BY\b(?!.*\b(?:ROWNUM|FETCH\s+FIRST|ROW_NUMBER|OFFSET)\b)',
+            'severity': 'low',
+            'description': 'ORDER BY 无分页限制，可能对大结果集排序消耗大量PGA/TEMP',
+            'suggestion': '添加ROWNUM限制或使用分页(12c+ FETCH FIRST N ROWS)',
+        },
+        {
+            'name': 'IMPLICIT_TYPE_CONVERSION',
+            'pattern': r"(?:WHERE|AND|OR)\s+\w+\s*=\s*'?\d{4,}'?",
+            'severity': 'medium',
+            'description': '可能存在隐式类型转换(字符串列与数值比较)导致索引失效',
+            'suggestion': '确保比较两侧数据类型一致，避免Oracle隐式调用TO_NUMBER/TO_CHAR',
+        },
+        {
+            'name': 'NESTED_SUBQUERY_DEEP',
+            'pattern': r'(?:\bSELECT\b.*){4,}',
+            'severity': 'medium',
+            'description': '嵌套子查询层级过深(4+层)，优化器可能无法有效优化',
+            'suggestion': '使用WITH(CTE)改写子查询，或拆分为多步操作',
+        },
+        {
+            'name': 'DISTINCT_ON_LARGE_SET',
+            'pattern': r'\bSELECT\s+DISTINCT\b',
+            'severity': 'low',
+            'description': 'DISTINCT 需要排序去重，大结果集消耗PGA/TEMP',
+            'suggestion': '检查是否因JOIN不当导致重复行，修正JOIN后移除DISTINCT',
+        },
+        {
+            'name': 'HINT_FULL_TABLE_SCAN',
+            'pattern': r'/\*\+.*\bFULL\s*\(\s*\w+\s*\).*\*/',
+            'severity': 'medium',
+            'description': 'SQL Hint强制全表扫描，可能是历史遗留或不适当的优化',
+            'suggestion': '评估全扫描提示是否仍然合理，更新统计信息后考虑移除',
+        },
+    ]
+
+    def detect(self, sql_text_list: list) -> list:
+        """Detect anti-patterns in a list of SQL text strings.
+        Each item should be a dict with at least 'sql_text' and optionally 'sql_id'.
+        Returns list of finding dicts."""
+        findings = []
+        if not sql_text_list:
+            return findings
+
+        for sql_entry in sql_text_list:
+            if isinstance(sql_entry, str):
+                sql_text = sql_entry
+                sql_id = 'unknown'
+            elif isinstance(sql_entry, dict):
+                sql_text = sql_entry.get('sql_text', sql_entry.get('SQL Text', ''))
+                sql_id = sql_entry.get('sql_id', sql_entry.get('SQL Id', 'unknown'))
+            else:
+                continue
+
+            if not sql_text or len(sql_text.strip()) < 10:
+                continue
+
+            sql_upper = sql_text.upper()
+            for pattern_def in self.PATTERNS:
+                try:
+                    if re.search(pattern_def['pattern'], sql_upper, re.IGNORECASE | re.DOTALL):
+                        findings.append({
+                            'sql_id': sql_id,
+                            'anti_pattern': pattern_def['name'],
+                            'severity': pattern_def['severity'],
+                            'description': pattern_def['description'],
+                            'suggestion': pattern_def['suggestion'],
+                            'sql_snippet': sql_text[:200],
+                        })
+                except re.error:
+                    pass
+
+        return findings
+
+    def detect_from_parsed(self, parsed_data: dict) -> list:
+        """Convenience method: extract SQL text from parsed AWR data and detect."""
+        sql_entries = []
+        top_sql = parsed_data.get('top_sql', {})
+        if isinstance(top_sql, dict):
+            for section_name, sql_list in top_sql.items():
+                if isinstance(sql_list, list):
+                    for entry in sql_list:
+                        if isinstance(entry, dict) and entry.get('sql_text', entry.get('SQL Text', '')):
+                            sql_entries.append(entry)
+        elif isinstance(top_sql, list):
+            for entry in top_sql:
+                if isinstance(entry, dict) and entry.get('sql_text', entry.get('SQL Text', '')):
+                    sql_entries.append(entry)
+
+        # Deduplicate by sql_id
+        seen = set()
+        unique_entries = []
+        for e in sql_entries:
+            sid = e.get('sql_id', e.get('SQL Id', ''))
+            if sid and sid not in seen:
+                seen.add(sid)
+                unique_entries.append(e)
+            elif not sid:
+                unique_entries.append(e)
+
+        return self.detect(unique_entries)
+
 
 # ---------------------------------------------------------------------------
 # AWR PARSER
@@ -703,15 +994,13 @@ class AWRParser:
     """Parse Oracle AWR HTML reports and extract structured metrics."""
 
     def parse(self, html_content: str) -> dict:
-        """Parse AWR HTML and return structured data dict with keys:
-        db_info, snap_info, load_profile, top_events, top_sql,
-        io_stats, memory_stats, instance_efficiency, os_stats,
-        rac_stats, redo_stats, parse_stats, segment_stats"""
+        """Parse AWR HTML and return structured data dict."""
         try:
             soup = BeautifulSoup(html_content, 'lxml')
         except Exception:
             soup = BeautifulSoup(html_content, 'html.parser')
         result = {
+            # Original 13 sections
             'db_info': self._extract_db_info(soup),
             'snap_info': self._extract_snap_info(soup),
             'load_profile': self._extract_load_profile(soup),
@@ -725,7 +1014,20 @@ class AWRParser:
             'redo_stats': self._extract_redo_stats(soup),
             'parse_stats': self._extract_parse_stats(soup),
             'segment_stats': self._extract_segment_stats(soup),
+            # New sections (v2)
+            'advisories': self._extract_advisories(soup),
+            'enqueue_activity': self._extract_enqueue_activity(soup),
+            'latch_detail': self._extract_latch_detail(soup),
+            'wait_histogram': self._extract_wait_histogram(soup),
+            'undo_stats': self._extract_undo_stats(soup),
+            'wait_class_summary': self._extract_wait_class_summary(soup),
+            'temp_stats': self._extract_temp_stats(soup),
         }
+        # Enrich top_events with wait_class classification
+        for evt in result.get('top_events', []):
+            ename = evt.get('event', evt.get('name', ''))
+            if ename and not evt.get('wait_class'):
+                evt['wait_class'] = classify_wait_event(ename)
         return result
 
     def _find_table_after(self, soup, pattern):
@@ -1139,6 +1441,133 @@ class AWRParser:
             pass
         return result
 
+    # -----------------------------------------------------------------
+    # NEW PARSER SECTIONS (v2)
+    # -----------------------------------------------------------------
+
+    def _extract_advisories(self, soup) -> dict:
+        """Extract Buffer Pool, PGA, Shared Pool, SGA Target advisories."""
+        result = {}
+        try:
+            advisory_patterns = {
+                'Buffer Pool': r'Buffer\s+Pool\s+Advisory',
+                'PGA': r'PGA\s+(?:Aggregate\s+)?(?:Target\s+)?Advisory',
+                'Shared Pool': r'Shared\s+Pool\s+Advisory',
+                'SGA Target': r'SGA\s+Target\s+Advisory',
+            }
+            for name, pattern in advisory_patterns.items():
+                table = self._find_table_after(soup, pattern)
+                rows = self._parse_table(table)
+                if rows:
+                    result[name] = rows
+        except Exception:
+            pass
+        return result
+
+    def _extract_enqueue_activity(self, soup) -> list:
+        """Extract Enqueue Activity (lock wait breakdown)."""
+        try:
+            table = self._find_table_after(soup, r'Enqueue\s+Activity')
+            return self._parse_table(table)
+        except Exception:
+            return []
+
+    def _extract_latch_detail(self, soup) -> list:
+        """Extract Latch Statistics / Latch Sleep Breakdown."""
+        result = []
+        try:
+            for pattern in [r'Latch\s+Activity', r'Latch\s+Sleep\s+Breakdown',
+                            r'Latch\s+Miss\s+Sources', r'Latch\s+Statistics']:
+                table = self._find_table_after(soup, pattern)
+                rows = self._parse_table(table)
+                for row in rows:
+                    row['_section'] = pattern.replace('\\s+', ' ')
+                result.extend(rows)
+        except Exception:
+            pass
+        return result
+
+    def _extract_wait_histogram(self, soup) -> list:
+        """Extract Wait Event Histogram (time distribution buckets)."""
+        try:
+            table = self._find_table_after(soup, r'Wait\s+Event\s+Histogram')
+            return self._parse_table(table)
+        except Exception:
+            return []
+
+    def _extract_undo_stats(self, soup) -> dict:
+        """Extract Undo Segment Statistics / Summary."""
+        result = {}
+        try:
+            table = self._find_table_after(soup, r'Undo\s+Segment\s+(?:Statistics|Summary)')
+            rows = self._parse_table(table)
+            if rows:
+                result['rows'] = rows
+            # Try to parse undo usage from text
+            text = soup.get_text()
+            m = re.search(r'Undo\s+(?:Tablespace|Space)\s+Used[:\s]*([\d\.]+)\s*(%|MB|GB)', text, re.IGNORECASE)
+            if m:
+                val = self._safe_float(m.group(1))
+                unit = m.group(2).strip()
+                if unit == '%':
+                    result['used_pct'] = val
+                else:
+                    result['used_size'] = val
+                    result['used_unit'] = unit
+            # Also check for specific undo metrics in the table
+            for row in rows:
+                for k, v in row.items():
+                    kl = k.lower()
+                    if 'unexpired' in kl and 'steal' in kl:
+                        result['unexpired_steal_count'] = self._safe_float(v)
+                    elif 'tuned' in kl and 'retention' in kl:
+                        result['tuned_undo_retention'] = self._safe_float(v)
+        except Exception:
+            pass
+        return result
+
+    def _extract_wait_class_summary(self, soup) -> list:
+        """Extract Foreground Wait Class summary (if present in AWR)."""
+        try:
+            table = self._find_table_after(soup, r'(?:Foreground\s+)?Wait\s+Class(?:es)?')
+            rows = self._parse_table(table)
+            return rows if rows else []
+        except Exception:
+            return []
+
+    def _extract_temp_stats(self, soup) -> dict:
+        """Extract Temp/Sort segment usage statistics."""
+        result = {}
+        try:
+            # Look for Temp tablespace usage
+            text = soup.get_text()
+            m = re.search(r'Temp\s+(?:Space|Tablespace)\s+Used[:\s]*([\d\.]+)\s*(%|MB|GB)', text, re.IGNORECASE)
+            if m:
+                val = self._safe_float(m.group(1))
+                unit = m.group(2).strip()
+                if unit == '%':
+                    result['used_pct'] = val
+                else:
+                    result['used_size'] = val
+                    result['used_unit'] = unit
+            # Also look for sort-related metrics in Instance Activity
+            table = self._find_table_after(soup, r'Instance\s+Activity\s+Stats')
+            if table:
+                rows = self._parse_table(table)
+                for row in rows:
+                    stat_name = (row.get('Statistic', row.get('name', ''))).lower()
+                    total = self._safe_float(row.get('Total', row.get('value', 0)))
+                    if 'sorts (disk)' in stat_name:
+                        result['sorts_disk'] = total
+                    elif 'sorts (memory)' in stat_name:
+                        result['sorts_memory'] = total
+                if result.get('sorts_disk', 0) > 0 and result.get('sorts_memory', 0) > 0:
+                    total_sorts = result['sorts_disk'] + result['sorts_memory']
+                    result['disk_sort_pct'] = (result['sorts_disk'] / total_sorts) * 100
+        except Exception:
+            pass
+        return result
+
     def _safe_float(self, val, default=0.0) -> float:
         """Safely convert a string to float."""
         try:
@@ -1380,7 +1809,9 @@ class MetricScorer:
         problems = []
         scored_metrics = {}  # metric_key -> value
 
+        # -----------------------------------------------------------------
         # 1. load_profile computed values
+        # -----------------------------------------------------------------
         try:
             load_profile = parsed_data.get('load_profile')
             if load_profile and isinstance(load_profile, dict):
@@ -1389,107 +1820,167 @@ class MetricScorer:
                     db_time = self._safe_float(computed.get('db_time'))
                     db_cpu = self._safe_float(computed.get('db_cpu'))
                     if db_cpu > 0:
-                        db_time_ratio = db_time / db_cpu
-                        scored_metrics['db_time_ratio'] = db_time_ratio
+                        scored_metrics['db_time_ratio'] = db_time / db_cpu
 
                     hard_parses = self._safe_float(computed.get('hard_parses'))
                     parses = self._safe_float(computed.get('parses'))
                     if parses > 0:
-                        hard_parse_pct = hard_parses / parses * 100
-                        scored_metrics['hard_parse_pct'] = hard_parse_pct
+                        scored_metrics['hard_parse_pct'] = hard_parses / parses * 100
+                        scored_metrics['hard_parses_per_sec'] = hard_parses
+                        scored_metrics['total_parses_per_sec'] = parses
 
                     redo_size = computed.get('redo_size')
                     if redo_size is not None:
                         scored_metrics['redo_size_per_sec'] = self._safe_float(redo_size)
+
+                    # New: transactions, logical reads, physical reads, executes
+                    txn = self._safe_float(computed.get('transactions'))
+                    if txn > 0:
+                        scored_metrics['transactions_per_sec'] = txn
+                    logical_reads = self._safe_float(computed.get('logical_reads'))
+                    if logical_reads > 0:
+                        scored_metrics['logical_reads_per_sec'] = logical_reads
+                    physical_reads = self._safe_float(computed.get('physical_reads'))
+                    if physical_reads > 0:
+                        scored_metrics['physical_reads_per_sec'] = physical_reads
+                    executes = self._safe_float(computed.get('executes'))
+                    if executes > 0:
+                        scored_metrics['sql_executions_per_sec'] = executes
         except Exception:
             pass
 
-        # 2. top_events
+        # -----------------------------------------------------------------
+        # 2. top_events - score avg_wait for all known events
+        # -----------------------------------------------------------------
         try:
             top_events = parsed_data.get('top_events', [])
             if top_events and isinstance(top_events, list):
-                # Score top 1 event pct_db_time
                 if len(top_events) > 0:
                     first_event = top_events[0]
                     pct_val = self._safe_float(first_event.get('pct_db_time'))
                     if pct_val > 0:
                         scored_metrics['top_event_pct_db_time'] = pct_val
 
-                # Score specific events by avg_wait
+                # Map event names -> metric keys for avg_wait scoring
+                EVENT_AVG_WAIT_MAP = {
+                    'db file sequential read': 'db_file_sequential_read_avg_wait',
+                    'db file scattered read': 'db_file_scattered_read_avg_wait',
+                    'log file sync': 'log_file_sync_avg_wait',
+                    'log file parallel write': 'log_file_parallel_write_avg_wait',
+                    'buffer busy waits': 'buffer_busy_waits_avg_wait',
+                    'read by other session': 'read_by_other_session_avg_wait',
+                    'enq: tx - row lock contention': 'enq_tx_row_lock_avg_wait',
+                }
+                # Also track top1 SQL pct from top events for DB CPU
                 for event in top_events:
                     event_name = (event.get('name') or event.get('event') or '').strip().lower()
                     avg_wait = self._safe_float(event.get('avg_wait'))
-                    if event_name == 'db file sequential read' and avg_wait > 0:
-                        scored_metrics['db_file_sequential_read_avg_wait'] = avg_wait
-                    elif event_name == 'db file scattered read' and avg_wait > 0:
-                        scored_metrics['db_file_scattered_read_avg_wait'] = avg_wait
-                    elif event_name == 'log file sync' and avg_wait > 0:
-                        scored_metrics['log_file_sync_avg_wait'] = avg_wait
+                    for pattern, metric_key in EVENT_AVG_WAIT_MAP.items():
+                        if event_name == pattern and avg_wait > 0:
+                            scored_metrics[metric_key] = avg_wait
+                            break
         except Exception:
             pass
 
-        # 3. top_sql
+        # -----------------------------------------------------------------
+        # 3. top_sql - buffer gets, disk reads, top1 pct
+        # -----------------------------------------------------------------
         try:
             top_sql = parsed_data.get('top_sql', {})
             if top_sql and isinstance(top_sql, dict):
-                # SQL ordered by Gets
                 sql_by_gets = top_sql.get('SQL ordered by Gets') or top_sql.get('sql_by_gets') or []
                 if sql_by_gets and len(sql_by_gets) > 0:
                     top_entry = sql_by_gets[0]
                     gets_per_exec = self._safe_float(
                         top_entry.get('gets_per_exec') or top_entry.get('gets/exec')
+                        or top_entry.get('Buffer Gets per Exec', 0)
                     )
                     if gets_per_exec > 0:
                         scored_metrics['buffer_gets_per_exec'] = gets_per_exec
 
-                # SQL ordered by Reads
                 sql_by_reads = top_sql.get('SQL ordered by Reads') or top_sql.get('sql_by_reads') or []
                 if sql_by_reads and len(sql_by_reads) > 0:
                     top_entry = sql_by_reads[0]
                     reads_per_exec = self._safe_float(
                         top_entry.get('reads_per_exec') or top_entry.get('reads/exec')
+                        or top_entry.get('Physical Reads per Exec', 0)
                     )
                     if reads_per_exec > 0:
                         scored_metrics['disk_reads_per_exec'] = reads_per_exec
+
+                # Top1 SQL by Elapsed Time as % of DB Time
+                sql_by_elapsed = top_sql.get('SQL ordered by Elapsed Time') or []
+                if sql_by_elapsed and len(sql_by_elapsed) > 0:
+                    top1_pct = self._safe_float(
+                        sql_by_elapsed[0].get('%Total') or sql_by_elapsed[0].get('pct_db_time')
+                        or sql_by_elapsed[0].get('% Total DB Time', 0)
+                    )
+                    if top1_pct > 0:
+                        scored_metrics['top1_sql_pct_db_time'] = top1_pct
         except Exception:
             pass
 
-        # 4. instance_efficiency
+        # -----------------------------------------------------------------
+        # 4. instance_efficiency - ALL efficiency metrics
+        # -----------------------------------------------------------------
         try:
             instance_eff = parsed_data.get('instance_efficiency', [])
             if instance_eff:
+                # Unified extraction helper
+                def _match_efficiency(name, val):
+                    nl = name.lower() if name else ''
+                    fval = self._safe_float(val)
+                    if fval <= 0:
+                        return
+                    if 'buffer' in nl and ('hit' in nl or 'nowait' in nl):
+                        scored_metrics.setdefault('buffer_cache_hit_ratio', fval)
+                    elif 'library' in nl and 'hit' in nl:
+                        scored_metrics.setdefault('library_cache_hit_ratio', fval)
+                    elif 'soft parse' in nl:
+                        scored_metrics.setdefault('soft_parse_pct', fval)
+                    elif 'execute to parse' in nl:
+                        scored_metrics.setdefault('execute_to_parse_pct', fval)
+                    elif 'latch hit' in nl:
+                        scored_metrics.setdefault('latch_hit_pct', fval)
+                    elif 'in-memory sort' in nl or 'memory sort' in nl:
+                        scored_metrics.setdefault('in_memory_sort_pct', fval)
+                    elif 'parse cpu' in nl and 'elapsed' in nl:
+                        scored_metrics.setdefault('parse_cpu_to_elapsed_pct', fval)
+                    elif 'non-parse cpu' in nl:
+                        pass  # informational, not scored separately
+
                 if isinstance(instance_eff, list):
                     for item in instance_eff:
-                        name = (item.get('name') or item.get('stat_name') or '').strip()
-                        val = self._safe_float(item.get('value') or item.get('pct'))
-                        if 'Buffer Hit' in name or 'Buffer Cache Hit' in name:
-                            scored_metrics['buffer_cache_hit_ratio'] = val
-                        elif 'Library Hit' in name or 'Library Cache Hit' in name:
-                            scored_metrics['library_cache_hit_ratio'] = val
+                        name = (item.get('name') or item.get('stat_name')
+                                or item.get('metric') or '').strip()
+                        val = item.get('value') or item.get('pct')
+                        _match_efficiency(name, val)
                 elif isinstance(instance_eff, dict):
                     for name, val in instance_eff.items():
-                        fval = self._safe_float(val)
-                        if 'Buffer Hit' in name or 'Buffer Cache Hit' in name:
-                            scored_metrics['buffer_cache_hit_ratio'] = fval
-                        elif 'Library Hit' in name or 'Library Cache Hit' in name:
-                            scored_metrics['library_cache_hit_ratio'] = fval
+                        _match_efficiency(name, val)
         except Exception:
             pass
 
-        # 5. rac_stats
+        # -----------------------------------------------------------------
+        # 5. rac_stats - gc cr + gc current
+        # -----------------------------------------------------------------
         try:
             rac_stats = parsed_data.get('rac_stats', [])
             if rac_stats and isinstance(rac_stats, list):
                 for stat in rac_stats:
                     name = (stat.get('name') or stat.get('stat_name') or '').strip().lower()
-                    if 'gc cr block receive time' in name:
-                        val = self._safe_float(stat.get('value') or stat.get('avg_wait'))
-                        if val > 0:
+                    val = self._safe_float(stat.get('value') or stat.get('avg_wait'))
+                    if val > 0:
+                        if 'gc cr block receive time' in name:
                             scored_metrics['gc_cr_block_receive_time'] = val
+                        elif 'gc current block receive time' in name:
+                            scored_metrics['gc_current_block_receive_time'] = val
         except Exception:
             pass
 
+        # -----------------------------------------------------------------
         # 6. AAS/CPU
+        # -----------------------------------------------------------------
         try:
             if report and hasattr(report, 'cpu_count') and report.cpu_count:
                 cpu_count = self._safe_float(report.cpu_count)
@@ -1505,7 +1996,171 @@ class MetricScorer:
         except Exception:
             pass
 
-        # Now score all collected metrics and build problem list
+        # -----------------------------------------------------------------
+        # 7. I/O stats - read/write latency, tablespace concentration
+        # -----------------------------------------------------------------
+        try:
+            io_stats = parsed_data.get('io_stats', [])
+            if io_stats and isinstance(io_stats, list):
+                total_reads = 0
+                max_reads = 0
+                for io in io_stats:
+                    reads = self._safe_float(io.get('Physical Reads', io.get('reads', io.get('physical_reads', 0))))
+                    total_reads += reads
+                    if reads > max_reads:
+                        max_reads = reads
+                    # avg read/write time per tablespace
+                    avg_rd = self._safe_float(io.get('Av Rd(ms)', io.get('avg_read_ms', io.get('Av Rd', 0))))
+                    avg_wr = self._safe_float(io.get('Av Wr(ms)', io.get('avg_write_ms', io.get('Av Wr', 0))))
+                    if avg_rd > scored_metrics.get('avg_read_time', 0):
+                        scored_metrics['avg_read_time'] = avg_rd
+                    if avg_wr > scored_metrics.get('avg_write_time', 0):
+                        scored_metrics['avg_write_time'] = avg_wr
+                if total_reads > 0 and max_reads > 0:
+                    scored_metrics['tablespace_io_pct'] = (max_reads / total_reads) * 100
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------------
+        # 8. OS stats
+        # -----------------------------------------------------------------
+        try:
+            os_stats = parsed_data.get('os_stats', [])
+            if os_stats and isinstance(os_stats, list):
+                busy_time = idle_time = 0
+                total_physical_mem = 0
+                free_swap = total_swap = 0
+                for stat in os_stats:
+                    name = (stat.get('name') or stat.get('stat_name') or stat.get('Statistic', '')).strip().lower()
+                    val = self._safe_float(stat.get('value') or stat.get('Value', 0))
+                    if 'busy_time' in name or 'busy time' in name:
+                        busy_time = val
+                    elif 'idle_time' in name or 'idle time' in name:
+                        idle_time = val
+                    elif 'load' in name and ('avg' in name or 'average' in name):
+                        if val > 0:
+                            cpu_count = 1
+                            if report and hasattr(report, 'cpu_count') and report.cpu_count:
+                                cpu_count = max(1, report.cpu_count)
+                            scored_metrics['os_load_avg'] = val / cpu_count
+                    elif 'physical memory' in name and 'total' in name:
+                        total_physical_mem = val
+                    elif 'free swap' in name or 'swap free' in name:
+                        free_swap = val
+                    elif ('total swap' in name or 'swap space' in name) and 'free' not in name:
+                        total_swap = val
+                if busy_time > 0 and (busy_time + idle_time) > 0:
+                    scored_metrics['os_cpu_used_pct'] = (busy_time / (busy_time + idle_time)) * 100
+                if total_swap > 0:
+                    used_swap = total_swap - free_swap
+                    scored_metrics['os_swap_used_pct'] = (used_swap / total_swap) * 100
+            elif os_stats and isinstance(os_stats, dict):
+                if os_stats.get('cpu_used_pct'):
+                    scored_metrics['os_cpu_used_pct'] = self._safe_float(os_stats['cpu_used_pct'])
+                if os_stats.get('load_avg'):
+                    scored_metrics['os_load_avg'] = self._safe_float(os_stats['load_avg'])
+                if os_stats.get('swap_used_pct'):
+                    scored_metrics['os_swap_used_pct'] = self._safe_float(os_stats['swap_used_pct'])
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------------
+        # 9. memory_stats - shared pool free, PGA over-allocation
+        # -----------------------------------------------------------------
+        try:
+            memory_stats = parsed_data.get('memory_stats', {})
+            if memory_stats:
+                # SGA sub-components
+                sga_list = memory_stats.get('SGA', []) if isinstance(memory_stats, dict) else []
+                if isinstance(sga_list, list):
+                    total_sga = 0
+                    free_mem = 0
+                    for item in sga_list:
+                        name = (item.get('Pool', '') + ' ' + item.get('Name', item.get('name', ''))).lower()
+                        size = self._safe_float(item.get('Size', item.get('size', item.get('Bytes', 0))))
+                        total_sga += size
+                        if 'free' in name and 'shared pool' in name:
+                            free_mem += size
+                    if total_sga > 0 and free_mem > 0:
+                        scored_metrics['shared_pool_free_pct'] = (free_mem / total_sga) * 100
+
+                # PGA stats
+                pga_list = memory_stats.get('PGA', []) if isinstance(memory_stats, dict) else []
+                if isinstance(pga_list, list):
+                    for item in pga_list:
+                        name = (item.get('name', item.get('Name', item.get('Statistic', '')))).lower()
+                        val = self._safe_float(item.get('value', item.get('Value', item.get('Bytes', 0))))
+                        if 'over alloc' in name and val > 0:
+                            scored_metrics['pga_over_allocation_count'] = val
+
+                # Advisory sections
+                advisories = parsed_data.get('advisories', {})
+                if isinstance(advisories, dict):
+                    pga_advice = advisories.get('PGA', [])
+                    if isinstance(pga_advice, list):
+                        for row in pga_advice:
+                            over = self._safe_float(row.get('Over Alloc', row.get('over_allocation_count', 0)))
+                            if over > 0:
+                                scored_metrics.setdefault('pga_over_allocation_count', over)
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------------
+        # 10. redo_stats - log switches per hour
+        # -----------------------------------------------------------------
+        try:
+            redo_stats = parsed_data.get('redo_stats', {})
+            if redo_stats and isinstance(redo_stats, dict):
+                log_switches = self._safe_float(redo_stats.get('log_switches', 0))
+                elapsed_seconds = self._safe_float(
+                    parsed_data.get('snap_info', {}).get('elapsed_seconds', 0)
+                )
+                if log_switches > 0 and elapsed_seconds > 0:
+                    scored_metrics['log_switches_per_hour'] = log_switches / (elapsed_seconds / 3600)
+                elif log_switches > 0:
+                    scored_metrics['log_switches_per_hour'] = log_switches  # assume per hour
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------------
+        # 11. parse_stats supplementary
+        # -----------------------------------------------------------------
+        try:
+            parse_stats = parsed_data.get('parse_stats', {})
+            if parse_stats and isinstance(parse_stats, dict):
+                if parse_stats.get('execute_to_parse_pct') and 'execute_to_parse_pct' not in scored_metrics:
+                    scored_metrics['execute_to_parse_pct'] = self._safe_float(parse_stats['execute_to_parse_pct'])
+                if parse_stats.get('parse_cpu_to_elapsed_pct') and 'parse_cpu_to_elapsed_pct' not in scored_metrics:
+                    scored_metrics['parse_cpu_to_elapsed_pct'] = self._safe_float(parse_stats['parse_cpu_to_elapsed_pct'])
+                if parse_stats.get('hard_parse_pct') and 'hard_parse_pct' not in scored_metrics:
+                    scored_metrics['hard_parse_pct'] = self._safe_float(parse_stats['hard_parse_pct'])
+                if parse_stats.get('hard_parses_per_sec') and 'hard_parses_per_sec' not in scored_metrics:
+                    scored_metrics['hard_parses_per_sec'] = self._safe_float(parse_stats['hard_parses_per_sec'])
+                if parse_stats.get('total_parses_per_sec') and 'total_parses_per_sec' not in scored_metrics:
+                    scored_metrics['total_parses_per_sec'] = self._safe_float(parse_stats['total_parses_per_sec'])
+        except Exception:
+            pass
+
+        # -----------------------------------------------------------------
+        # 12. undo / temp space (from advisories or dedicated sections)
+        # -----------------------------------------------------------------
+        try:
+            undo_stats = parsed_data.get('undo_stats', {})
+            if undo_stats and isinstance(undo_stats, dict):
+                used_pct = self._safe_float(undo_stats.get('used_pct', 0))
+                if used_pct > 0:
+                    scored_metrics['undo_space_used_pct'] = used_pct
+            temp_stats = parsed_data.get('temp_stats', {})
+            if temp_stats and isinstance(temp_stats, dict):
+                used_pct = self._safe_float(temp_stats.get('used_pct', 0))
+                if used_pct > 0:
+                    scored_metrics['temp_space_used_pct'] = used_pct
+        except Exception:
+            pass
+
+        # =================================================================
+        # Build problem list from scored metrics
+        # =================================================================
         for metric_key, value in scored_metrics.items():
             try:
                 result = self.score_metric(metric_key, value)

@@ -56,8 +56,8 @@ def create_app():
 
 
 def _seed_defaults(app):
-    """Create default admin user and seed knowledge rules."""
-    from .awr_engine import BUILTIN_RULES
+    """Create default admin user and seed/sync knowledge rules."""
+    from .awr_engine import BUILTIN_RULES, BUILTIN_RULES_VERSION
 
     # Default admin
     if not User.query.filter_by(username='admin').first():
@@ -66,22 +66,45 @@ def _seed_defaults(app):
         db.session.add(admin)
         db.session.commit()
 
-    # Seed builtin knowledge rules
-    if KnowledgeRule.query.filter_by(source='builtin').count() == 0:
+    # Seed / incremental-sync builtin knowledge rules
+    current_version = SystemSetting.get('builtin_rules_version', '0')
+    if int(current_version) < BUILTIN_RULES_VERSION:
+        # Build lookup of existing builtin rules by name
+        existing = {r.name: r for r in KnowledgeRule.query.filter_by(source='builtin').all()}
+        code_names = set()
         for rule in BUILTIN_RULES:
-            entry = KnowledgeRule(
-                name=rule['name'],
-                category=rule['category'],
-                conditions_json=json.dumps(rule['conditions'], ensure_ascii=False),
-                root_cause=rule['root_cause'],
-                solution=rule['solution'],
-                severity=rule['severity'],
-                confidence=0.9,
-                status='active',
-                source='builtin',
-                is_active=True,
-            )
-            db.session.add(entry)
+            code_names.add(rule['name'])
+            if rule['name'] in existing:
+                # Update existing rule in-place (keep hit_count & confidence)
+                entry = existing[rule['name']]
+                entry.category = rule['category']
+                entry.conditions_json = json.dumps(rule['conditions'], ensure_ascii=False)
+                entry.root_cause = rule['root_cause']
+                entry.solution = rule['solution']
+                entry.severity = rule['severity']
+                entry.is_active = True
+                entry.status = 'active'
+            else:
+                # New rule
+                entry = KnowledgeRule(
+                    name=rule['name'],
+                    category=rule['category'],
+                    conditions_json=json.dumps(rule['conditions'], ensure_ascii=False),
+                    root_cause=rule['root_cause'],
+                    solution=rule['solution'],
+                    severity=rule['severity'],
+                    confidence=0.9,
+                    status='active',
+                    source='builtin',
+                    is_active=True,
+                )
+                db.session.add(entry)
+        # Soft-delete builtin rules removed from code
+        for name, entry in existing.items():
+            if name not in code_names:
+                entry.status = 'stale'
+                entry.is_active = False
+        SystemSetting.set('builtin_rules_version', str(BUILTIN_RULES_VERSION))
         db.session.commit()
 
     # Seed default system settings

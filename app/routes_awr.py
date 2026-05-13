@@ -5,7 +5,8 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from .models import db, AWRReport, AWRMetric, AWRProblem, AWRAnalysisResult, KnowledgeRule, AuditLog, SystemSetting
-from .awr_engine import AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer, LLMIntegration, LearningEngine
+from .awr_engine import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer,
+                         LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event)
 
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
@@ -497,6 +498,43 @@ def analyze_report(report_id):
     comparer = BaselineComparer()
     deviations = comparer.compare(report, parsed_data, db.session)
 
+    # Step 3.5: SQL Anti-Pattern Detection
+    anti_pattern_detector = SQLAntiPatternDetector()
+    sql_anti_patterns = anti_pattern_detector.detect_from_parsed(parsed_data)
+    # Convert anti-pattern findings into problem format
+    for ap in sql_anti_patterns:
+        problems.append({
+            'problem_type': 'sql_anti_pattern',
+            'title': f"SQL反模式: {ap['anti_pattern']} (SQL_ID={ap['sql_id']})",
+            'severity': ap['severity'],
+            'health_level': 'warning' if ap['severity'] in ('low', 'medium') else 'serious',
+            'metric_name': f"anti_pattern_{ap['anti_pattern'].lower()}",
+            'metric_value': None,
+            'metric_unit': '',
+            'evidence': f"{ap['description']}\nSQL片段: {ap['sql_snippet'][:100]}",
+            'threshold_warning': None,
+            'threshold_serious': None,
+        })
+
+    # Step 3.6: Wait Class Aggregation
+    wait_class_totals = {}
+    for evt in parsed_data.get('top_events', []):
+        wclass = evt.get('wait_class') or classify_wait_event(evt.get('event', evt.get('name', '')))
+        pct = float(evt.get('pct_db_time', 0) or 0)
+        wait_class_totals[wclass] = wait_class_totals.get(wclass, 0) + pct
+    # Flag if any non-idle wait class dominates
+    for wclass, total_pct in wait_class_totals.items():
+        if wclass in ('Idle', 'Other'):
+            continue
+        if total_pct > 40:
+            correlations.append({
+                'title': f'Wait Class "{wclass}" 累计占 DB Time {total_pct:.1f}%',
+                'trigger_problem': f'{wclass} 类等待事件汇总',
+                'related_evidence': [f'{wclass} 类事件合计 {total_pct:.1f}% DB Time'],
+                'root_cause': f'{wclass} 类等待是主要性能瓶颈方向',
+                'suggestion': f'重点关注 {wclass} 类下的各具体等待事件',
+            })
+
     # Step 4: LLM enhancement (optional)
     use_llm = request.form.get('use_llm') == 'on'
     llm_result = None
@@ -533,6 +571,8 @@ def analyze_report(report_id):
         f"健康等级: {health_level}",
         f"发现问题: {len(all_problems)}个",
     ]
+    if sql_anti_patterns:
+        summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
     if llm_result:
         summary_parts.append("(含LLM增强分析)")
     summary = ' | '.join(summary_parts)
