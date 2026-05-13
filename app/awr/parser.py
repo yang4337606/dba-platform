@@ -72,15 +72,53 @@ class AWRParser:
         return result
 
     def _find_table_after(self, soup: BeautifulSoup, pattern: str) -> Tag | None:
-        """Find the first table element following a header matching pattern."""
+        """Find the first table element following a header matching pattern.
+
+        Handles Oracle AWR HTML quirks:
+        - Section headers as <h3 class="awr">Title</h3>
+        - Bare text nodes between <p/> tags (e.g. '<p/>Load Profile<p/>')
+        - Table summary attributes
+        Avoids matching TOC <a> links or <th>/<td> inside tables which would
+        return the wrong table via find_next().
+        """
         try:
-            for tag in soup.find_all(['h2', 'h3', 'h4', 'th', 'td', 'b', 'a', 'span', 'p']):
+            # Strategy 1: Match h2/h3/h4 headings (most reliable for AWR)
+            for tag in soup.find_all(['h2', 'h3', 'h4']):
                 text = tag.get_text(strip=True)
                 if text and re.search(pattern, text, re.IGNORECASE):
-                    # Look for next table sibling or in parent
                     table = tag.find_next('table')
                     if table:
                         return table
+
+            # Strategy 2: Match text in <b>, <span>, <p> tags (NOT inside tables or links)
+            for tag in soup.find_all(['b', 'span', 'p']):
+                if tag.find_parent('table') or tag.find_parent('a'):
+                    continue
+                text = tag.get_text(strip=True)
+                if text and re.search(pattern, text, re.IGNORECASE):
+                    table = tag.find_next('table')
+                    if table:
+                        return table
+
+            # Strategy 3: Search bare NavigableStrings (text nodes not inside tags)
+            from bs4 import NavigableString
+            for text_node in soup.find_all(string=re.compile(pattern, re.IGNORECASE)):
+                if isinstance(text_node, NavigableString):
+                    parent = text_node.parent
+                    if parent and parent.name in ('a', 'th', 'td', 'li', 'title', 'style', 'script', 'option'):
+                        continue
+                    if parent and parent.find_parent('table'):
+                        continue
+                    table = text_node.find_next('table')
+                    if table:
+                        return table
+
+            # Strategy 4: Match table summary attribute
+            for table in soup.find_all('table'):
+                summary = table.get('summary', '')
+                if summary and re.search(pattern, summary, re.IGNORECASE):
+                    return table
+
             return None
         except Exception:
             logger.debug("_find_table_after failed", exc_info=True)
@@ -120,45 +158,59 @@ class AWRParser:
     def _extract_db_info(self, soup: BeautifulSoup) -> dict[str, str]:
         result = {'db_name': '', 'instance_name': '', 'db_version': '', 'host_name': '', 'platform': ''}
         try:
-            # Try regex on full text
-            text = soup.get_text()
-            patterns = {
-                'db_name': r'DB\s*Name[:\s]*(\S+)',
-                'instance_name': r'Instance\s*Name[:\s]*(\S+)',
-                'db_version': r'(?:DB\s*)?Version[:\s]*([\d\.]+)',
-                'host_name': r'Host\s*Name[:\s]*(\S+)',
-                'platform': r'Platform[:\s]*(.+?)(?:\n|$)',
-            }
-            for key, pat in patterns.items():
-                m = re.search(pat, text, re.IGNORECASE)
+            # Strategy 1: Parse from <title> tag (most reliable for AWR)
+            # Format: "AWR Report for DB: TESTDB, Inst: testdb, Snaps: 2992-3003"
+            title_tag = soup.find('title')
+            if title_tag:
+                title_text = title_tag.get_text(strip=True)
+                m = re.search(r'DB:\s*(\S+)', title_text, re.IGNORECASE)
                 if m:
-                    result[key] = m.group(1).strip()
-            # Try table-based extraction
-            table = self._find_table_after(soup, r'Database Instance Information|DB\s*Name')
+                    result['db_name'] = m.group(1).rstrip(',')
+                m = re.search(r'Inst:\s*(\S+)', title_text, re.IGNORECASE)
+                if m:
+                    result['instance_name'] = m.group(1).rstrip(',')
+
+            # Strategy 2: Parse DB info table by summary attribute
+            table = None
+            for t in soup.find_all('table'):
+                summary = (t.get('summary') or '').lower()
+                if 'database instance' in summary or 'database info' in summary:
+                    table = t
+                    break
+            if not table:
+                table = self._find_table_after(soup, r'Database Instance Information|DB\s*Name')
+
             if table:
                 rows = self._parse_table(table)
                 for row in rows:
                     for k, v in row.items():
                         kl = k.lower()
-                        if 'db name' in kl and v and not result['db_name']:
+                        if ('db name' in kl or 'db_name' in kl) and v and not result['db_name']:
                             result['db_name'] = v
-                        elif 'instance' in kl and 'name' in kl and v and not result['instance_name']:
+                        elif ('instance' in kl) and v and not result['instance_name']:
                             result['instance_name'] = v
-                        elif 'version' in kl and v and not result['db_version']:
+                        elif ('release' in kl or 'version' in kl) and v and not result['db_version']:
                             result['db_version'] = v
-                        elif 'host' in kl and v and not result['host_name']:
+
+            # Strategy 3: Parse host info table
+            host_table = None
+            for t in soup.find_all('table'):
+                summary = (t.get('summary') or '').lower()
+                if 'host' in summary:
+                    host_table = t
+                    break
+            if not host_table:
+                host_table = self._find_table_after(soup, r'Host\s+Name')
+            if host_table and host_table != table:
+                rows = self._parse_table(host_table)
+                for row in rows:
+                    for k, v in row.items():
+                        kl = k.lower()
+                        if 'host' in kl and v and not result['host_name']:
                             result['host_name'] = v
                         elif 'platform' in kl and v and not result['platform']:
                             result['platform'] = v
-                # Also check if headers themselves are the values (AWR format)
-                if rows and not result['db_name']:
-                    for row in rows:
-                        vals = list(row.values())
-                        keys = list(row.keys())
-                        for i, k in enumerate(keys):
-                            kl = k.lower()
-                            if 'db name' in kl and i < len(vals):
-                                result['db_name'] = vals[i] if vals[i] else result['db_name']
+
         except Exception:
             logger.debug("_extract_db_info failed", exc_info=True)
             pass
@@ -168,65 +220,90 @@ class AWRParser:
         result = {'begin_id': '', 'end_id': '', 'snap_begin': '', 'snap_end': '',
                   'duration': '', 'elapsed_seconds': 0}
         try:
-            text = soup.get_text()
-            # Try regex patterns
-            m = re.search(r'Begin\s+Snap[:\s]*(\d+)', text, re.IGNORECASE)
-            if m:
-                result['begin_id'] = m.group(1)
-            m = re.search(r'End\s+Snap[:\s]*(\d+)', text, re.IGNORECASE)
-            if m:
-                result['end_id'] = m.group(1)
-            # Time patterns
-            m = re.search(r'Begin\s+Snap\s+Time[:\s]*([\d\-\/\s:]+)', text, re.IGNORECASE)
-            if m:
-                result['snap_begin'] = m.group(1).strip()
-            m = re.search(r'End\s+Snap\s+Time[:\s]*([\d\-\/\s:]+)', text, re.IGNORECASE)
-            if m:
-                result['snap_end'] = m.group(1).strip()
-            m = re.search(r'Elapsed[:\s]*([\d\.]+)\s*\(?(min|sec|hrs)?', text, re.IGNORECASE)
-            if m:
-                result['duration'] = m.group(0).strip()
-                val = self._safe_float(m.group(1))
-                unit = m.group(2) if m.group(2) else ''
-                if 'min' in unit.lower():
-                    result['elapsed_seconds'] = val * 60
-                elif 'hrs' in unit.lower() or 'hour' in unit.lower():
-                    result['elapsed_seconds'] = val * 3600
-                else:
-                    result['elapsed_seconds'] = val
-            # Try table-based extraction
-            table = self._find_table_after(soup, r'Snap\s*Id|Snapshot')
-            if table:
-                rows = self._parse_table(table)
-                for row in rows:
-                    for k, v in row.items():
-                        kl = k.lower()
-                        if 'begin' in kl and 'snap' in kl and v and not result['begin_id']:
-                            # could be snap id
-                            num = re.search(r'(\d+)', v)
-                            if num:
-                                result['begin_id'] = num.group(1)
-                        elif 'end' in kl and 'snap' in kl and v and not result['end_id']:
-                            num = re.search(r'(\d+)', v)
-                            if num:
-                                result['end_id'] = num.group(1)
-                        elif 'elapsed' in kl and v:
-                            result['duration'] = v
-                            # Try to parse elapsed time in format HH:MM:SS or minutes
-                            time_match = re.search(r'(\d+):(\d+):(\d+)', v)
-                            if time_match:
-                                h, m_val, s = int(time_match.group(1)), int(time_match.group(2)), int(time_match.group(3))
-                                result['elapsed_seconds'] = h * 3600 + m_val * 60 + s
-                            else:
-                                result['elapsed_seconds'] = self._safe_float(v)
-            # Also look for snap IDs in a different format
+            # Strategy 1: Parse from <title> tag
+            # Format: "AWR Report for DB: TESTDB, Inst: testdb, Snaps: 2992-3003"
+            title_tag = soup.find('title')
+            if title_tag:
+                title_text = title_tag.get_text(strip=True)
+                m = re.search(r'Snaps?:\s*(\d+)\s*-\s*(\d+)', title_text, re.IGNORECASE)
+                if m:
+                    result['begin_id'] = m.group(1)
+                    result['end_id'] = m.group(2)
+
+            # Strategy 2: Parse snapshot table (find by summary attribute or heading)
+            snap_table = None
+            for t in soup.find_all('table'):
+                summary = (t.get('summary') or '').lower()
+                if 'snapshot' in summary or 'snap' in summary:
+                    snap_table = t
+                    break
+            if not snap_table:
+                snap_table = self._find_table_after(soup, r'Snap\s*Id|Snapshot')
+
+            if snap_table:
+                # AWR snapshot tables have special layout:
+                # Row 1: headers (Snap Id, Snap Time, Sessions, ...)
+                # Row 2: Begin Snap: | 2992 | 17-Nov-19 00:00:08 | ...
+                # Row 3: End Snap: | 3003 | 17-Nov-19 11:00:44 | ...
+                # Row 4: Elapsed: | | 660.60 (mins) | ...
+                # Row 5: DB Time: | | 0.86 (mins) | ...
+                all_rows = snap_table.find_all('tr')
+                for row in all_rows:
+                    cells = [cell.get_text(strip=True) for cell in row.find_all(['th', 'td'])]
+                    row_text = ' '.join(cells).lower()
+                    if 'begin' in row_text and 'snap' in row_text:
+                        for cell in cells:
+                            if re.match(r'^\d+$', cell.strip()):
+                                if not result['begin_id']:
+                                    result['begin_id'] = cell.strip()
+                                    continue
+                            if re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
+                                result['snap_begin'] = cell.strip()
+                    elif 'end' in row_text and 'snap' in row_text:
+                        for cell in cells:
+                            if re.match(r'^\d+$', cell.strip()):
+                                if not result['end_id']:
+                                    result['end_id'] = cell.strip()
+                                    continue
+                            if re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
+                                result['snap_end'] = cell.strip()
+                    elif 'elapsed' in row_text:
+                        for cell in cells:
+                            m = re.search(r'([\d,\.]+)\s*\(?(min|sec|hrs|hour)?', cell, re.IGNORECASE)
+                            if m:
+                                val = self._safe_float(m.group(1).replace(',', ''))
+                                unit = (m.group(2) or '').lower()
+                                if 'min' in unit:
+                                    result['elapsed_seconds'] = val * 60
+                                elif 'hrs' in unit or 'hour' in unit:
+                                    result['elapsed_seconds'] = val * 3600
+                                else:
+                                    result['elapsed_seconds'] = val
+                                result['duration'] = cell.strip()
+                                break
+
+            # Strategy 3: Fallback regex on separated text
             if not result['begin_id']:
-                snap_ids = re.findall(r'Snap\s*Id\s*[\s:]*(\d+)', text, re.IGNORECASE)
-                if len(snap_ids) >= 2:
-                    result['begin_id'] = snap_ids[0]
-                    result['end_id'] = snap_ids[1]
-                elif len(snap_ids) == 1:
-                    result['begin_id'] = snap_ids[0]
+                text = soup.get_text(separator=' ')
+                m = re.search(r'Begin\s+Snap[:\s]+(\d+)', text, re.IGNORECASE)
+                if m:
+                    result['begin_id'] = m.group(1)
+                m = re.search(r'End\s+Snap[:\s]+(\d+)', text, re.IGNORECASE)
+                if m:
+                    result['end_id'] = m.group(1)
+            if not result['elapsed_seconds']:
+                text = soup.get_text(separator=' ')
+                m = re.search(r'Elapsed[:\s]+([\d,\.]+)\s*\(?(min|sec|hrs)?', text, re.IGNORECASE)
+                if m:
+                    val = self._safe_float(m.group(1).replace(',', ''))
+                    unit = (m.group(2) or '').lower()
+                    if 'min' in unit:
+                        result['elapsed_seconds'] = val * 60
+                    elif 'hrs' in unit or 'hour' in unit:
+                        result['elapsed_seconds'] = val * 3600
+                    else:
+                        result['elapsed_seconds'] = val
+
         except Exception:
             logger.debug("_extract_snap_info failed", exc_info=True)
             pass
@@ -242,12 +319,12 @@ class AWRParser:
                 'db time': 'db_time',
                 'db cpu': 'db_cpu',
                 'redo size': 'redo_size',
-                'logical reads': 'logical_reads',
-                'physical reads': 'physical_reads',
-                'hard parses': 'hard_parses',
+                'logical read': 'logical_reads',
+                'physical read': 'physical_reads',
+                'hard parse': 'hard_parses',
                 'parses': 'parses',
-                'executes': 'executes',
-                'transactions': 'transactions',
+                'execute': 'executes',
+                'transaction': 'transactions',
             }
             for row in rows:
                 # The first column is usually the metric name, second is "Per Second"
@@ -280,7 +357,7 @@ class AWRParser:
     def _extract_top_events(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         """Extract Top Timed Events with %DB Time, Avg Wait, Wait Class."""
         try:
-            table = self._find_table_after(soup, r'Top\s+(?:5|10)\s+(?:Timed|Foreground)\s+Events|Top\s+Timed\s+Events')
+            table = self._find_table_after(soup, r'Top\s+(?:\d+\s+)?(?:Timed|Foreground)\s+Events|Top\s+Timed\s+Events')
             rows = self._parse_table(table)
             events = []
             for row in rows:
@@ -288,18 +365,19 @@ class AWRParser:
                          'pct_db_time': 0, 'wait_class': ''}
                 for k, v in row.items():
                     kl = k.lower()
-                    if 'event' in kl or 'name' in kl:
+                    if 'event' in kl or kl == 'name':
                         event['event'] = v
-                    elif 'waits' in kl or 'total wait' in kl:
+                    elif kl == 'waits' or kl == 'wait count':
                         event['waits'] = self._safe_float(v)
-                    elif 'time' in kl and 'db' not in kl and 'avg' not in kl and '%' not in kl:
-                        event['time'] = self._safe_float(v)
                     elif 'avg' in kl and 'wait' in kl:
                         event['avg_wait'] = self._safe_float(v)
-                    elif '%' in kl or 'db time' in kl or 'pct' in kl:
+                    elif 'db time' in kl:
                         event['pct_db_time'] = self._safe_float(v)
                     elif 'class' in kl:
                         event['wait_class'] = v
+                    elif 'total wait' in kl or ('time' in kl and 'db' not in kl
+                          and 'avg' not in kl and '%' not in kl and 'out' not in kl):
+                        event['time'] = self._safe_float(v)
                 if event['event']:
                     events.append(event)
             return events
@@ -358,13 +436,27 @@ class AWRParser:
     def _extract_instance_efficiency(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         try:
             table = self._find_table_after(soup, r'Instance\s+Efficiency\s+Percentages|Instance\s+Efficiency')
-            rows = self._parse_table(table)
-            if rows:
-                return rows
-            # If standard table parse didn't work, try extracting from text
+            result = []
             if table:
-                result = []
-                text = table.get_text()
+                # AWR Instance Efficiency table has a special 4-column layout:
+                # <td>Name1:</td><td>Value1</td><td>Name2:</td><td>Value2</td>
+                # No header row, just td pairs.
+                all_rows = table.find_all('tr')
+                for row in all_rows:
+                    cells = [cell.get_text(strip=True) for cell in row.find_all(['th', 'td'])]
+                    # Process pairs: (name, value, name, value, ...)
+                    i = 0
+                    while i < len(cells) - 1:
+                        name = cells[i].rstrip(':').strip()
+                        val_str = cells[i + 1].strip()
+                        if name and val_str:
+                            val = self._safe_float(val_str)
+                            if val > 0:
+                                result.append({'metric': name, 'name': name, 'value': val})
+                        i += 2
+            if not result:
+                # Fallback: regex on text
+                text = (table.get_text() if table else soup.get_text(separator=' '))
                 patterns = [
                     (r'Buffer\s+(?:Nowait|Hit)\s+%[:\s]*([\d\.]+)', 'Buffer Hit %'),
                     (r'Library\s+Hit\s+%[:\s]*([\d\.]+)', 'Library Hit %'),
@@ -372,15 +464,15 @@ class AWRParser:
                     (r'Soft\s+Parse\s+%[:\s]*([\d\.]+)', 'Soft Parse %'),
                     (r'Execute\s+to\s+Parse\s+%[:\s]*([\d\.]+)', 'Execute to Parse %'),
                     (r'Latch\s+Hit\s+%[:\s]*([\d\.]+)', 'Latch Hit %'),
-                    (r'Parse\s+CPU\s+to\s+Parse\s+Elapsed\s+%[:\s]*([\d\.]+)', 'Parse CPU to Parse Elapsed %'),
+                    (r'Parse\s+CPU\s+to\s+Parse\s+Elapsd?\s+%[:\s]*([\d\.]+)', 'Parse CPU to Parse Elapsed %'),
                     (r'Non-Parse\s+CPU\s+%[:\s]*([\d\.]+)', 'Non-Parse CPU %'),
+                    (r'Redo\s+NoWait\s+%[:\s]*([\d\.]+)', 'Redo NoWait %'),
                 ]
                 for pat, name in patterns:
                     m = re.search(pat, text, re.IGNORECASE)
                     if m:
-                        result.append({'metric': name, 'value': self._safe_float(m.group(1))})
-                return result
-            return []
+                        result.append({'metric': name, 'name': name, 'value': self._safe_float(m.group(1))})
+            return result
         except Exception:
             logger.debug("_extract_instance_efficiency failed", exc_info=True)
             return []
@@ -512,7 +604,7 @@ class AWRParser:
         try:
             advisory_patterns = {
                 'Buffer Pool': r'Buffer\s+Pool\s+Advisory',
-                'PGA': r'PGA\s+(?:Aggregate\s+)?(?:Target\s+)?Advisory',
+                'PGA': r'PGA\s+(?:Memory\s+|Aggregate\s+)?(?:Target\s+)?Advisory',
                 'Shared Pool': r'Shared\s+Pool\s+Advisory',
                 'SGA Target': r'SGA\s+Target\s+Advisory',
             }
