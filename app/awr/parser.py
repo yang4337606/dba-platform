@@ -69,6 +69,23 @@ class AWRParser:
             ename = evt.get('event', evt.get('name', ''))
             if ename and not evt.get('wait_class'):
                 evt['wait_class'] = classify_wait_event(ename)
+
+        # Check if parsing yielded minimal data (non-standard report format)
+        db_info = result.get('db_info', {})
+        has_db_info = any(db_info.get(k) for k in ('db_name', 'instance_name', 'db_version'))
+        has_metrics = bool(
+            result.get('top_events')
+            or result.get('load_profile', {}).get('raw')
+            or result.get('instance_efficiency')
+            or result.get('time_model')
+        )
+        if not has_db_info and not has_metrics:
+            result['_parse_warning'] = (
+                'Non-standard AWR report format detected: no database info or metrics could be extracted. '
+                'The report may lack standard HTML structure (title, table summary attributes, or section headings).'
+            )
+            logger.warning("AWR parse yielded empty results – possible non-standard report format")
+
         return result
 
     def _find_table_after(self, soup: BeautifulSoup, pattern: str) -> Tag | None:

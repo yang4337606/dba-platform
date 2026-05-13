@@ -74,7 +74,7 @@
     </div>
     <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">
       OLTP={{ workload_info.get('oltp_score', 0) }} / OLAP={{ workload_info.get('olap_score', 0) }}
-      {% if workload_info.get('threshold_adjustments') %} &middot; 已应用{{ workload_info.threshold_adjustments|length }}项阈值调整{% endif %}
+      {% if workload_info.get('threshold_adjustments') %} &middot; {{ _('label_threshold_adjustments', count=workload_info.threshold_adjustments|length) }}{% endif %}
     </div>
   </div>
   {% if workload_info.get('signals') %}
@@ -258,15 +258,37 @@
   <div class="analysis-body">
     {% for vn in version_notes %}
     <div class="finding-item" style="background:var(--bg-tertiary);border-radius:8px;padding:12px 16px;">
+      {% if vn is mapping %}
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="badge badge-info">{{ _('label_version_info') }}</span>
-        <span class="finding-title">{{ vn.title if vn.title is defined else vn }}</span>
+        <span class="finding-title">{{ vn.get('feature', vn.get('title', '')) }}</span>
       </div>
-      {% if vn.description is defined %}
+      {% if vn.get('description') %}
       <div class="finding-desc">{{ vn.description }}</div>
       {% endif %}
-      {% if vn.detail is defined %}
+      {% if vn.get('impact') %}
+      <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+        <strong>{{ _('label_version_impact') }}:</strong> {{ vn.impact }}
+      </div>
+      {% endif %}
+      {% if vn.get('parameter') %}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-family:var(--font-mono);">
+        <strong>{{ _('label_version_parameter') }}:</strong> {{ vn.parameter }}
+      </div>
+      {% endif %}
+      {% if vn.get('diagnosis') %}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+        <strong>{{ _('label_version_diagnosis') }}:</strong> {{ vn.diagnosis }}
+      </div>
+      {% endif %}
+      {% if vn.get('detail') %}
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">{{ vn.detail }}</div>
+      {% endif %}
+      {% else %}
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge badge-info">{{ _('label_version_info') }}</span>
+        <span class="finding-title">{{ vn }}</span>
+      </div>
       {% endif %}
     </div>
     {% endfor %}

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}AWR报告 #{{ report.id }}{% endblock %}
+{% block title %}{{ _('label_awr_report') }} #{{ report.id }}{% endblock %}
 {% block content %}
 <div class="page-header">
   <div>
     <h1 class="page-title">{{ report.title }}</h1>
     <div class="page-subtitle">
       {{ report.db_name or _('label_unknown') }} / {{ report.instance_name or _('label_unknown') }}
-      &middot; 快照 #{{ report.snap_begin_id or '?' }} - #{{ report.snap_end_id or '?' }}
+      &middot; {{ _('label_snap_prefix') }} #{{ report.snap_begin_id or '?' }} - #{{ report.snap_end_id or '?' }}
     </div>
   </div>
   <div class="btn-group">
@@ -88,8 +88,24 @@
   <div class="analysis-header">&#9632; {{ _('section_load_profile') }}</div>
   <div class="analysis-body">
     <div class="table-wrap">
+    {# Detect if load_profile contains list-of-dict rows to use dynamic headers #}
+    {% set ns = namespace(has_raw_rows=false, raw_keys=[]) %}
+    {% for m in metrics_by_type['load_profile'] %}
+      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+      {% set inner = extra.get('value') %}
+      {% if inner is iterable and inner is not string and inner is not mapping and inner|length > 0 and inner[0] is mapping %}
+        {% set ns.has_raw_rows = true %}
+        {% set ns.raw_keys = inner[0].keys()|list %}
+      {% endif %}
+    {% endfor %}
     <table>
-      <thead><tr><th>{{ _('th_metric') }}</th><th>{{ _('th_value') }}</th><th>{{ _('th_unit') }}</th></tr></thead>
+      <thead><tr>
+      {% if ns.has_raw_rows %}
+        {% for k in ns.raw_keys %}<th style="font-size:11px;">{{ k }}</th>{% endfor %}
+      {% else %}
+        <th>{{ _('th_metric') }}</th><th>{{ _('th_value') }}</th><th>{{ _('th_unit') }}</th>
+      {% endif %}
+      </tr></thead>
       <tbody>
       {% for m in metrics_by_type['load_profile'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
@@ -109,7 +125,6 @@
           {% for k in row_keys %}
           <td style="font-size:12px;font-family:var(--font-mono);">{{ row.get(k, '-') }}</td>
           {% endfor %}
-          {% if row_keys|length < 3 %}<td></td>{% endif %}
         </tr>
         {% endfor %}
       {% else %}
@@ -213,8 +228,26 @@
     <div class="table-wrap">
     {% set first_extra = (metrics_by_type['wait_histogram'][0].extra_json|fromjson) if metrics_by_type['wait_histogram'][0].extra_json else {} %}
     {% set hist_keys = first_extra.keys()|list %}
+    {# Build friendly column name mapping #}
+    {% set hist_friendly = {
+      'event': _('th_event'),
+      'Event': _('th_event'),
+      'name': _('th_event'),
+      'waits': _('th_waits'),
+      'Waits': _('th_waits'),
+      'wait_count': _('th_waits'),
+      'total_wait_time': _('th_total_wait_time'),
+      'Total Wait Time': _('th_total_wait_time'),
+      'avg_wait': _('th_avg_wait'),
+      'Avg Wait': _('th_avg_wait'),
+      'wait_class': _('th_wait_class'),
+      'Wait Class': _('th_wait_class'),
+      '%DB time': _('th_pct_db_time'),
+      'pct_db_time': _('th_pct_db_time'),
+      '_section': _('th_section')
+    } %}
     <table>
-      <thead><tr>{% for k in hist_keys %}<th style="font-size:11px;">{{ k }}</th>{% endfor %}</tr></thead>
+      <thead><tr>{% for k in hist_keys %}<th style="font-size:11px;">{{ hist_friendly.get(k, k) }}</th>{% endfor %}</tr></thead>
       <tbody>
       {% for m in metrics_by_type['wait_histogram'] %}
       {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
@@ -237,7 +270,7 @@
   <h3 style="font-size:16px;font-weight:600;margin-bottom:12px;">{{ _('section_analysis_records') }}</h3>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>ID</th><th>类型</th><th>健康等级</th><th>分析师</th><th>时间</th><th>操作</th></tr></thead>
+    <thead><tr><th>ID</th><th>{{ _('th_type') }}</th><th>{{ _('th_health') }}</th><th>{{ _('th_analyst') }}</th><th>{{ _('th_time') }}</th><th>{{ _('th_operations') }}</th></tr></thead>
     <tbody>
     {% for a in analyses %}
     <tr>
