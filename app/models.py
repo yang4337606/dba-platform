@@ -73,8 +73,8 @@ class AWRReport(db.Model):
     # Hardware info
     cpu_count = db.Column(db.Integer, nullable=True)
 
-    # Store the original HTML content
-    raw_html = db.Column(db.Text)
+    # raw_html removed: large AWR HTML now served from file_path on disk
+    # raw_html = db.Column(db.Text)  # DEPRECATED - use file_path instead
 
     # Ownership and status
     upload_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))

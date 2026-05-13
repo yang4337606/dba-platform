@@ -85,7 +85,6 @@ def upload():
                 snap_begin_time=snap_info.get('snap_begin') or snap_info.get('begin_time'),
                 snap_end_time=snap_info.get('snap_end') or snap_info.get('end_time'),
                 elapsed_seconds=snap_info.get('elapsed_seconds'),
-                raw_html=html_content,
                 upload_user_id=current_user.id,
                 status='parsed',
             )
@@ -477,11 +476,12 @@ def _store_list_or_dict(report_id, metric_type, data):
 
 
 def _reconstruct_parsed_data(report):
-    """Reconstruct parsed_data dict from stored AWRMetric records, or re-parse from raw_html."""
+    """Reconstruct parsed_data dict from stored AWRMetric records, or re-parse from file_path."""
     metrics = AWRMetric.query.filter_by(report_id=report.id).all()
-    if not metrics and report.raw_html:
-        parser = AWRParser()
-        return parser.parse(report.raw_html)
+    if not metrics and report.file_path and os.path.exists(report.file_path):
+        with open(report.file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            parser = AWRParser()
+            return parser.parse(f.read())
 
     parsed_data = {
         'db_info': {
