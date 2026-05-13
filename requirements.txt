@@ -1,0 +1,7 @@
+Flask>=2.3
+Flask-Login>=0.6
+Flask-SQLAlchemy>=3.0
+beautifulsoup4>=4.12
+lxml>=4.9
+Werkzeug>=2.3
+pytest>=7.0
