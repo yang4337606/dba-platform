@@ -148,7 +148,85 @@
 </div>
 {% endif %}
 
-{% if not diff.get('load_profile') and not diff.get('wait_events') and not diff.get('efficiency') and not diff.get('key_metrics') %}
+<!-- Memory Stats Changes -->
+{% if diff.get('memory') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9881; 内存统计变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>组件</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <tbody>
+      {% for item in diff['memory'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change_pct > 0 %}#ef4444{% elif item.change_pct < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change_pct > 0 %}+{% endif %}{{ '%.1f'|format(item.change_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- IO Stats Changes -->
+{% if diff.get('io_stats') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9660; IO统计变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <tbody>
+      {% for item in diff['io_stats'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change_pct > 0 %}#ef4444{% elif item.change_pct < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change_pct > 0 %}+{% endif %}{{ '%.1f'|format(item.change_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Time Model Changes -->
+{% if diff.get('time_model') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9202; 时间模型变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>报告A (s)</th><th>报告B (s)</th><th>变化%</th></tr></thead>
+      <tbody>
+      {% for item in diff['time_model'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change_pct > 0 %}#ef4444{% elif item.change_pct < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change_pct > 0 %}+{% endif %}{{ '%.1f'|format(item.change_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if not diff.get('load_profile') and not diff.get('wait_events') and not diff.get('efficiency') and not diff.get('key_metrics') and not diff.get('memory') and not diff.get('io_stats') and not diff.get('time_model') %}
 <div class="analysis-section">
   <div class="analysis-body" style="text-align:center;padding:48px;color:var(--text-secondary);">
     暂无可对比的指标数据。请确认两份报告均已解析完成。

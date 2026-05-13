@@ -37,6 +37,7 @@
           <a href="{{ url_for('awr.view_report', report_id=r.id) }}" class="btn btn-sm btn-secondary">查看</a>
           {% if current_user.is_admin %}
           <form method="POST" action="{{ url_for('awr.delete_report', report_id=r.id) }}" style="display:inline;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-danger" data-confirm="确认删除此报告？">删除</button>
           </form>
           {% endif %}

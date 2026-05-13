@@ -11,6 +11,7 @@
 
 <div class="card" style="max-width:640px;">
   <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
       <label class="form-label">报告标题</label>
       <input type="text" name="title" class="form-input" placeholder="例: PROD数据库-20260512快照" required>
@@ -21,8 +22,8 @@
       <div class="upload-zone">
         <div class="upload-icon">&#9670;</div>
         <div class="upload-text">点击或拖拽文件到此处</div>
-        <div class="upload-hint">支持 .html / .htm / .txt 格式，最大 50MB</div>
-        <input type="file" id="file-input" name="file" accept=".html,.htm,.txt" style="display:none;" required>
+        <div class="upload-hint">支持 .html / .htm 格式，最大 50MB</div>
+        <input type="file" id="file-input" name="file" accept=".html,.htm" style="display:none;" required>
       </div>
     </div>
 

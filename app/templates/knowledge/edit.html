@@ -10,6 +10,7 @@
 
 <div class="card" style="max-width:640px;">
   <form method="POST">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">分类</label>

@@ -6,6 +6,21 @@ import re
 import json
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_float(val, default=0.0):
+    """Safely convert a value to float, returning default on failure."""
+    if val is None:
+        return default
+    try:
+        if isinstance(val, str):
+            val = re.sub(r'[,%\s]', '', val)
+        return float(val)
+    except (ValueError, TypeError):
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -2335,6 +2350,7 @@ class AWRParser:
         try:
             soup = BeautifulSoup(html_content, 'lxml')
         except Exception:
+            logger.debug("parse lxml fallback to html.parser", exc_info=True)
             soup = BeautifulSoup(html_content, 'html.parser')
         result = {
             # Original 13 sections
@@ -2360,6 +2376,15 @@ class AWRParser:
             'wait_class_summary': self._extract_wait_class_summary(soup),
             'temp_stats': self._extract_temp_stats(soup),
             'time_model': self._extract_time_model(soup),
+            # New sections (Batch 4 - missing AWR chapters)
+            'io_profile': self._extract_io_profile(soup),
+            'file_io_stats': self._extract_file_io_stats(soup),
+            'dictionary_cache_stats': self._extract_dictionary_cache_stats(soup),
+            'library_cache_activity': self._extract_library_cache_activity(soup),
+            'init_parameters': self._extract_init_parameters(soup),
+            'background_wait_events': self._extract_background_wait_events(soup),
+            'service_statistics': self._extract_service_statistics(soup),
+            'instance_recovery_stats': self._extract_instance_recovery_stats(soup),
         }
         # Enrich top_events with wait_class classification
         for evt in result.get('top_events', []):
@@ -2380,6 +2405,7 @@ class AWRParser:
                         return table
             return None
         except Exception:
+            logger.debug("_find_table_after failed", exc_info=True)
             return None
 
     def _parse_table(self, table):
@@ -2410,6 +2436,7 @@ class AWRParser:
                 result.append(row_dict)
             return result
         except Exception:
+            logger.debug("_parse_table failed", exc_info=True)
             return []
 
     def _extract_db_info(self, soup) -> dict:
@@ -2455,6 +2482,7 @@ class AWRParser:
                             if 'db name' in kl and i < len(vals):
                                 result['db_name'] = vals[i] if vals[i] else result['db_name']
         except Exception:
+            logger.debug("_extract_db_info failed", exc_info=True)
             pass
         return result
 
@@ -2522,6 +2550,7 @@ class AWRParser:
                 elif len(snap_ids) == 1:
                     result['begin_id'] = snap_ids[0]
         except Exception:
+            logger.debug("_extract_snap_info failed", exc_info=True)
             pass
         return result
 
@@ -2567,6 +2596,7 @@ class AWRParser:
                         break
             return {'raw': rows, 'computed': computed}
         except Exception:
+            logger.debug("_extract_load_profile failed", exc_info=True)
             return {'raw': [], 'computed': {}}
 
     def _extract_top_events(self, soup) -> list:
@@ -2596,6 +2626,7 @@ class AWRParser:
                     events.append(event)
             return events
         except Exception:
+            logger.debug("_extract_top_events failed", exc_info=True)
             return []
 
     def _extract_top_sql(self, soup) -> dict:
@@ -2614,6 +2645,7 @@ class AWRParser:
                 rows = self._parse_table(table)
                 result[name] = rows[:15]
         except Exception:
+            logger.debug("_extract_top_sql failed", exc_info=True)
             pass
         return result
 
@@ -2622,6 +2654,7 @@ class AWRParser:
             table = self._find_table_after(soup, r'IOStat|I/O\s*Stat|Tablespace\s+IO\s+Stats')
             return self._parse_table(table)
         except Exception:
+            logger.debug("_extract_io_stats failed", exc_info=True)
             return []
 
     def _extract_memory_stats(self, soup) -> dict:
@@ -2637,6 +2670,7 @@ class AWRParser:
             if bp_table:
                 result['Buffer Pool'] = self._parse_table(bp_table)
         except Exception:
+            logger.debug("_extract_memory_stats failed", exc_info=True)
             pass
         return result
 
@@ -2667,6 +2701,7 @@ class AWRParser:
                 return result
             return []
         except Exception:
+            logger.debug("_extract_instance_efficiency failed", exc_info=True)
             return []
 
     def _extract_os_stats(self, soup) -> list:
@@ -2674,6 +2709,7 @@ class AWRParser:
             table = self._find_table_after(soup, r'Operating\s+System\s+Statistics|OS\s+Statistics')
             return self._parse_table(table)
         except Exception:
+            logger.debug("_extract_os_stats failed", exc_info=True)
             return []
 
     def _extract_rac_stats(self, soup) -> list:
@@ -2681,6 +2717,7 @@ class AWRParser:
             table = self._find_table_after(soup, r'RAC\s+Statistics|Global\s+Cache')
             return self._parse_table(table)
         except Exception:
+            logger.debug("_extract_rac_stats failed", exc_info=True)
             return []
 
     def _extract_redo_stats(self, soup) -> dict:
@@ -2717,6 +2754,7 @@ class AWRParser:
                 if redo_rows:
                     result['redo_table'] = redo_rows
         except Exception:
+            logger.debug("_extract_redo_stats failed", exc_info=True)
             pass
         return result
 
@@ -2757,6 +2795,7 @@ class AWRParser:
                 if m:
                     result['parse_cpu_to_elapsed_pct'] = self._safe_float(m.group(1))
         except Exception:
+            logger.debug("_extract_parse_stats failed", exc_info=True)
             pass
         return result
 
@@ -2776,6 +2815,7 @@ class AWRParser:
                     row['_source'] = pattern.replace(r'\s+', ' ').replace('\\s+', ' ')
                     result.append(row)
         except Exception:
+            logger.debug("_extract_segment_stats failed", exc_info=True)
             pass
         return result
 
@@ -2799,6 +2839,7 @@ class AWRParser:
                 if rows:
                     result[name] = rows
         except Exception:
+            logger.debug("_extract_advisories failed", exc_info=True)
             pass
         return result
 
@@ -2808,6 +2849,7 @@ class AWRParser:
             table = self._find_table_after(soup, r'Enqueue\s+Activity')
             return self._parse_table(table)
         except Exception:
+            logger.debug("_extract_enqueue_activity failed", exc_info=True)
             return []
 
     def _extract_latch_detail(self, soup) -> list:
@@ -2822,6 +2864,7 @@ class AWRParser:
                     row['_section'] = pattern.replace('\\s+', ' ')
                 result.extend(rows)
         except Exception:
+            logger.debug("_extract_latch_detail failed", exc_info=True)
             pass
         return result
 
@@ -2831,6 +2874,7 @@ class AWRParser:
             table = self._find_table_after(soup, r'Wait\s+Event\s+Histogram')
             return self._parse_table(table)
         except Exception:
+            logger.debug("_extract_wait_histogram failed", exc_info=True)
             return []
 
     def _extract_undo_stats(self, soup) -> dict:
@@ -2861,6 +2905,7 @@ class AWRParser:
                     elif 'tuned' in kl and 'retention' in kl:
                         result['tuned_undo_retention'] = self._safe_float(v)
         except Exception:
+            logger.debug("_extract_undo_stats failed", exc_info=True)
             pass
         return result
 
@@ -2871,6 +2916,7 @@ class AWRParser:
             rows = self._parse_table(table)
             return rows if rows else []
         except Exception:
+            logger.debug("_extract_wait_class_summary failed", exc_info=True)
             return []
 
     def _extract_temp_stats(self, soup) -> dict:
@@ -2903,6 +2949,7 @@ class AWRParser:
                     total_sorts = result['sorts_disk'] + result['sorts_memory']
                     result['disk_sort_pct'] = (result['sorts_disk'] / total_sorts) * 100
         except Exception:
+            logger.debug("_extract_temp_stats failed", exc_info=True)
             pass
         return result
 
@@ -2937,31 +2984,107 @@ class AWRParser:
                         safe_key = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()).strip('_')
                         result[safe_key] = {'name': name, 'time_seconds': self._safe_float(m.group(1)), 'pct_db_time': 0}
         except Exception:
+            logger.debug("_extract_time_model failed", exc_info=True)
             pass
         return result
 
-    def _safe_float(self, val, default=0.0) -> float:
-        """Safely convert a string to float."""
+    # --- Batch 4: Missing AWR chapter extractors ---
+
+    def _extract_io_profile(self, soup) -> list:
+        """Extract IO Profile summary (Read/Write IOPS, throughput, latency)."""
         try:
-            if val is None:
-                return default
-            s = str(val).strip()
-            if not s:
-                return default
-            s = s.replace(',', '').replace('%', '').replace(' ', '')
-            multiplier = 1
-            if s.upper().endswith('G'):
-                multiplier = 1e9
-                s = s[:-1]
-            elif s.upper().endswith('M'):
-                multiplier = 1e6
-                s = s[:-1]
-            elif s.upper().endswith('K'):
-                multiplier = 1000
-                s = s[:-1]
-            return float(s) * multiplier
-        except (ValueError, TypeError):
-            return default
+            table = self._find_table_after(soup, r'IO\s+Profile|IOProfile|I/O\s+Profile')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_io_profile failed", exc_info=True)
+            return []
+
+    def _extract_file_io_stats(self, soup) -> list:
+        """Extract individual datafile IO statistics."""
+        try:
+            table = self._find_table_after(soup, r'File\s+IO\s+Stat|Datafile\s+IO|File\s+I/O')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_file_io_stats failed", exc_info=True)
+            return []
+
+    def _extract_dictionary_cache_stats(self, soup) -> list:
+        """Extract Dictionary Cache (row cache) statistics."""
+        try:
+            table = self._find_table_after(soup, r'Dictionary\s+Cache\s+Stats|Row\s+Cache')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_dictionary_cache_stats failed", exc_info=True)
+            return []
+
+    def _extract_library_cache_activity(self, soup) -> list:
+        """Extract Library Cache Activity statistics."""
+        try:
+            table = self._find_table_after(soup, r'Library\s+Cache\s+Activity')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_library_cache_activity failed", exc_info=True)
+            return []
+
+    def _extract_init_parameters(self, soup) -> list:
+        """Extract non-default Initialization Parameters."""
+        try:
+            table = self._find_table_after(soup, r'init\.ora\s+Parameters|Initialization\s+Parameters|init\s+Parameters')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_init_parameters failed", exc_info=True)
+            return []
+
+    def _extract_background_wait_events(self, soup) -> list:
+        """Extract Background Wait Events."""
+        try:
+            table = self._find_table_after(soup, r'Background\s+Wait\s+Events')
+            if table:
+                rows = self._parse_table(table)
+                for row in rows:
+                    ename = row.get('Event', row.get('event', ''))
+                    if ename:
+                        row['wait_class'] = classify_wait_event(ename)
+                return rows
+            return []
+        except Exception:
+            logger.debug("_extract_background_wait_events failed", exc_info=True)
+            return []
+
+    def _extract_service_statistics(self, soup) -> list:
+        """Extract Service Statistics."""
+        try:
+            table = self._find_table_after(soup, r'Service\s+Statistics')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_service_statistics failed", exc_info=True)
+            return []
+
+    def _extract_instance_recovery_stats(self, soup) -> list:
+        """Extract Instance Recovery Statistics."""
+        try:
+            table = self._find_table_after(soup, r'Instance\s+Recovery\s+Stats')
+            if table:
+                return self._parse_table(table)
+            return []
+        except Exception:
+            logger.debug("_extract_instance_recovery_stats failed", exc_info=True)
+            return []
+
+    def _safe_float(self, val, default=0.0) -> float:
+        return _safe_float(val, default)
 
 
 # ---------------------------------------------------------------------------
@@ -3067,13 +3190,7 @@ class MetricScorer:
         }
 
     def _safe_float(self, val, default=0.0):
-        """Safely convert a value to float."""
-        try:
-            if val is None:
-                return default
-            return float(val)
-        except (ValueError, TypeError):
-            return default
+        return _safe_float(val, default)
 
     def _get_problem_type(self, metric_key):
         """Map metric key to problem type category."""
@@ -3225,6 +3342,7 @@ class MetricScorer:
                     if executes > 0:
                         scored_metrics['sql_executions_per_sec'] = executes
         except Exception:
+            logger.debug("score_all load_profile failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3258,6 +3376,7 @@ class MetricScorer:
                             scored_metrics[metric_key] = avg_wait
                             break
         except Exception:
+            logger.debug("score_all top_events failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3296,6 +3415,7 @@ class MetricScorer:
                     if top1_pct > 0:
                         scored_metrics['top1_sql_pct_db_time'] = top1_pct
         except Exception:
+            logger.debug("score_all top_sql failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3337,6 +3457,7 @@ class MetricScorer:
                     for name, val in instance_eff.items():
                         _match_efficiency(name, val)
         except Exception:
+            logger.debug("score_all instance_efficiency failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3354,6 +3475,7 @@ class MetricScorer:
                         elif 'gc current block receive time' in name:
                             scored_metrics['gc_current_block_receive_time'] = val
         except Exception:
+            logger.debug("score_all rac_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3372,6 +3494,7 @@ class MetricScorer:
                         aas_per_cpu = aas / cpu_count
                         scored_metrics['aas_per_cpu'] = aas_per_cpu
         except Exception:
+            logger.debug("score_all aas_per_cpu failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3397,6 +3520,7 @@ class MetricScorer:
                 if total_reads > 0 and max_reads > 0:
                     scored_metrics['tablespace_io_pct'] = (max_reads / total_reads) * 100
         except Exception:
+            logger.debug("score_all io_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3440,6 +3564,7 @@ class MetricScorer:
                 if os_stats.get('swap_used_pct'):
                     scored_metrics['os_swap_used_pct'] = self._safe_float(os_stats['swap_used_pct'])
         except Exception:
+            logger.debug("score_all os_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3481,6 +3606,7 @@ class MetricScorer:
                             if over > 0:
                                 scored_metrics.setdefault('pga_over_allocation_count', over)
         except Exception:
+            logger.debug("score_all memory_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3498,6 +3624,7 @@ class MetricScorer:
                 elif log_switches > 0:
                     scored_metrics['log_switches_per_hour'] = log_switches  # assume per hour
         except Exception:
+            logger.debug("score_all redo_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3517,6 +3644,7 @@ class MetricScorer:
                 if parse_stats.get('total_parses_per_sec') and 'total_parses_per_sec' not in scored_metrics:
                     scored_metrics['total_parses_per_sec'] = self._safe_float(parse_stats['total_parses_per_sec'])
         except Exception:
+            logger.debug("score_all parse_stats failed", exc_info=True)
             pass
 
         # -----------------------------------------------------------------
@@ -3534,6 +3662,7 @@ class MetricScorer:
                 if used_pct > 0:
                     scored_metrics['temp_space_used_pct'] = used_pct
         except Exception:
+            logger.debug("score_all undo_temp_stats failed", exc_info=True)
             pass
 
         # =================================================================
@@ -3559,6 +3688,7 @@ class MetricScorer:
                     }
                     problems.append(problem)
             except Exception:
+                logger.debug("score_all threshold evaluation failed", exc_info=True)
                 pass
 
         # Restore original thresholds if overrides were applied

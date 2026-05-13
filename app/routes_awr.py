@@ -438,6 +438,16 @@ def _store_metrics(report_id, parsed):
             )
             db.session.add(metric)
 
+    # --- New sections (Batch 4 - missing AWR chapters) ---
+    _store_list_or_dict(report_id, 'io_profile', parsed.get('io_profile', []))
+    _store_list_or_dict(report_id, 'file_io', parsed.get('file_io_stats', []))
+    _store_list_or_dict(report_id, 'dict_cache', parsed.get('dictionary_cache_stats', []))
+    _store_list_or_dict(report_id, 'lib_cache', parsed.get('library_cache_activity', []))
+    _store_list_or_dict(report_id, 'init_param', parsed.get('init_parameters', []))
+    _store_list_or_dict(report_id, 'bg_wait_event', parsed.get('background_wait_events', []))
+    _store_list_or_dict(report_id, 'service_stat', parsed.get('service_statistics', []))
+    _store_list_or_dict(report_id, 'instance_recovery', parsed.get('instance_recovery_stats', []))
+
 
 def _store_list_or_dict(report_id, metric_type, data):
     """Generic helper to store list-or-dict parsed sections as AWRMetric rows."""
@@ -507,6 +517,14 @@ def _reconstruct_parsed_data(report):
         'wait_class_summary': [],
         'temp_stats': [],
         'time_model': {},
+        'io_profile': [],
+        'file_io_stats': [],
+        'dictionary_cache_stats': [],
+        'library_cache_activity': [],
+        'init_parameters': [],
+        'background_wait_events': [],
+        'service_statistics': [],
+        'instance_recovery_stats': [],
     }
 
     for m in metrics:
@@ -586,6 +604,22 @@ def _reconstruct_parsed_data(report):
             parsed_data['time_model'][m.metric_name] = extra if extra else {
                 'name': m.metric_name, 'time_seconds': m.metric_value
             }
+        elif m.metric_type == 'io_profile':
+            parsed_data['io_profile'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'file_io':
+            parsed_data['file_io_stats'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'dict_cache':
+            parsed_data['dictionary_cache_stats'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'lib_cache':
+            parsed_data['library_cache_activity'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'init_param':
+            parsed_data['init_parameters'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'bg_wait_event':
+            parsed_data['background_wait_events'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'service_stat':
+            parsed_data['service_statistics'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
+        elif m.metric_type == 'instance_recovery':
+            parsed_data['instance_recovery_stats'].append(extra if extra else {'name': m.metric_name, 'value': m.metric_value})
 
     # Sort ordered items
     parsed_data['top_events'].sort(key=lambda x: x.get('pct_db_time', x.get('pct', 0)) or 0, reverse=True)
@@ -848,6 +882,78 @@ def view_analysis(report_id, analysis_id):
                            learned_patterns=learned_patterns)
 
 
+@awr_bp.route('/<int:report_id>/analysis/<int:analysis_id>/export')
+@login_required
+def export_analysis(report_id, analysis_id):
+    """Export analysis results as downloadable JSON."""
+    report = AWRReport.query.get_or_404(report_id)
+    analysis = AWRAnalysisResult.query.get_or_404(analysis_id)
+    if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
+        flash('无权导出', 'error')
+        return redirect(url_for('awr.list_reports'))
+
+    export_data = {
+        'report': {
+            'id': report.id,
+            'title': report.title,
+            'db_name': report.db_name,
+            'instance_name': report.instance_name,
+            'db_version': report.db_version,
+            'host_name': report.host_name,
+            'snap_begin_id': report.snap_begin_id,
+            'snap_end_id': report.snap_end_id,
+            'elapsed_seconds': report.elapsed_seconds,
+        },
+        'analysis': {
+            'id': analysis.id,
+            'type': analysis.analysis_type,
+            'health_level': analysis.health_level,
+            'summary': analysis.summary,
+            'created_at': analysis.created_at.isoformat() if analysis.created_at else None,
+        },
+        'problems': json.loads(analysis.problems_json) if analysis.problems_json else [],
+        'recommendations': json.loads(analysis.recommendations_json) if analysis.recommendations_json else {},
+        'correlations': json.loads(analysis.correlation_findings_json) if analysis.correlation_findings_json else [],
+    }
+
+    from flask import Response
+    response = Response(
+        json.dumps(export_data, ensure_ascii=False, indent=2, default=str),
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename=awr_analysis_{report_id}_{analysis_id}.json'}
+    )
+    return response
+
+
+@awr_bp.route('/<int:report_id>/export_metrics')
+@login_required
+def export_metrics(report_id):
+    """Export report metrics as CSV."""
+    report = AWRReport.query.get_or_404(report_id)
+    if current_user.role == 'viewer' and report.upload_user_id != current_user.id:
+        flash('无权导出', 'error')
+        return redirect(url_for('awr.list_reports'))
+
+    import csv
+    import io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['metric_type', 'metric_name', 'metric_value', 'metric_unit', 'rank_order'])
+
+    metrics = AWRMetric.query.filter_by(report_id=report.id).order_by(
+        AWRMetric.metric_type, AWRMetric.rank_order.asc()).all()
+    for m in metrics:
+        writer.writerow([m.metric_type, m.metric_name, m.metric_value, m.metric_unit, m.rank_order])
+
+    from flask import Response
+    response = Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename=awr_metrics_{report_id}.csv'}
+    )
+    return response
+
+
 @awr_bp.route('/compare', methods=['GET', 'POST'])
 @login_required
 def compare_reports():
@@ -887,6 +993,9 @@ def _build_comparison(parsed_a, parsed_b, report_a, report_b):
         'wait_events': [],
         'efficiency': [],
         'key_metrics': [],
+        'memory': [],
+        'io_stats': [],
+        'time_model': [],
     }
 
     # Compare load profile computed values
@@ -955,6 +1064,83 @@ def _build_comparison(parsed_a, parsed_b, report_a, report_b):
             diff['key_metrics'].append(item)
     # Sort by absolute change descending
     diff['key_metrics'].sort(key=lambda x: abs(x.get('change_pct', 0)), reverse=True)
+
+    # Compare memory stats
+    diff['memory'] = []
+    mem_a = parsed_a.get('memory_stats', {})
+    mem_b = parsed_b.get('memory_stats', {})
+    # Flatten to comparable format
+    def _flatten_memory(mem):
+        result = {}
+        if isinstance(mem, dict):
+            for section, rows in mem.items():
+                if isinstance(rows, list):
+                    for row in rows:
+                        name = row.get('name', row.get('component', row.get('Pool Name', '')))
+                        size = row.get('size', row.get('value', row.get('Size (M)', 0)))
+                        if name:
+                            result[f"{section}:{name}"] = float(size) if isinstance(size, (int, float)) else 0
+        elif isinstance(mem, list):
+            for row in mem:
+                name = row.get('name', row.get('component', ''))
+                val = row.get('size', row.get('value', 0))
+                if name:
+                    result[name] = float(val) if isinstance(val, (int, float)) else 0
+        return result
+    flat_a = _flatten_memory(mem_a)
+    flat_b = _flatten_memory(mem_b)
+    for key in set(list(flat_a.keys()) + list(flat_b.keys())):
+        val_a = flat_a.get(key, 0)
+        val_b = flat_b.get(key, 0)
+        change_pct = ((val_b - val_a) / val_a * 100) if val_a != 0 else 0
+        diff['memory'].append({
+            'metric': key, 'value_a': val_a, 'value_b': val_b,
+            'change_pct': round(change_pct, 1),
+        })
+
+    # Compare IO stats
+    diff['io_stats'] = []
+    def _flatten_io(io_data):
+        result = {}
+        if isinstance(io_data, list):
+            for row in io_data:
+                name = row.get('name', row.get('tablespace', row.get('function', '')))
+                reads = row.get('reads', row.get('value', 0))
+                if name:
+                    result[name] = float(reads) if isinstance(reads, (int, float)) else 0
+        return result
+    io_a = _flatten_io(parsed_a.get('io_stats', []))
+    io_b = _flatten_io(parsed_b.get('io_stats', []))
+    for key in set(list(io_a.keys()) + list(io_b.keys())):
+        val_a = io_a.get(key, 0)
+        val_b = io_b.get(key, 0)
+        change_pct = ((val_b - val_a) / val_a * 100) if val_a != 0 else 0
+        diff['io_stats'].append({
+            'metric': key, 'value_a': val_a, 'value_b': val_b,
+            'change_pct': round(change_pct, 1),
+        })
+
+    # Compare time model
+    diff['time_model'] = []
+    def _flatten_time_model(tm):
+        result = {}
+        if isinstance(tm, dict):
+            for key, val in tm.items():
+                if isinstance(val, dict):
+                    result[val.get('name', key)] = float(val.get('time_seconds', 0) or 0)
+                else:
+                    result[key] = float(val) if isinstance(val, (int, float)) else 0
+        return result
+    tm_a = _flatten_time_model(parsed_a.get('time_model', {}))
+    tm_b = _flatten_time_model(parsed_b.get('time_model', {}))
+    for key in set(list(tm_a.keys()) + list(tm_b.keys())):
+        val_a = tm_a.get(key, 0)
+        val_b = tm_b.get(key, 0)
+        change_pct = ((val_b - val_a) / val_a * 100) if val_a != 0 else 0
+        diff['time_model'].append({
+            'metric': key, 'value_a': round(val_a, 2), 'value_b': round(val_b, 2),
+            'change_pct': round(change_pct, 1),
+        })
 
     return diff
 

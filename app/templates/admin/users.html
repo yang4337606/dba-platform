@@ -31,6 +31,7 @@
           <a href="{{ url_for('admin.edit_user', user_id=u.id) }}" class="btn btn-sm btn-secondary">编辑</a>
           {% if u.id != current_user.id %}
           <form method="POST" action="{{ url_for('admin.delete_user', user_id=u.id) }}" style="display:inline;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-danger" data-confirm="确认删除用户 {{ u.username }}？">删除</button>
           </form>
           {% endif %}

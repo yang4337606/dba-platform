@@ -76,6 +76,7 @@
           <a href="{{ url_for('knowledge.edit_entry', entry_id=e.id) }}" class="btn btn-sm btn-secondary">编辑</a>
           {% if current_user.is_admin %}
           <form method="POST" action="{{ url_for('knowledge.delete_entry', entry_id=e.id) }}" style="display:inline;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <button class="btn btn-sm btn-danger" data-confirm="确认删除？">删除</button>
           </form>
           {% endif %}

@@ -1,8 +1,28 @@
+import time
+from collections import defaultdict
 from datetime import datetime
 from urllib.parse import urlparse
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_user, logout_user, login_required, current_user
 from .models import db, User, AuditLog
+
+# Simple in-memory rate limiter for login attempts
+_login_attempts = defaultdict(list)  # ip -> [timestamps]
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def _is_rate_limited(ip):
+    """Check if an IP has exceeded login attempt limits."""
+    now = time.time()
+    # Clean old entries
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW_SECONDS]
+    return len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS
+
+
+def _record_attempt(ip):
+    """Record a failed login attempt."""
+    _login_attempts[ip].append(time.time())
 
 
 def _is_safe_redirect_url(target):
@@ -21,6 +41,12 @@ def login():
         return redirect(url_for('main.dashboard'))
 
     if request.method == 'POST':
+        # Rate limit check
+        client_ip = request.remote_addr
+        if _is_rate_limited(client_ip):
+            flash('登录尝试过于频繁，请5分钟后再试', 'error')
+            return render_template('auth/login.html')
+
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         user = User.query.filter_by(username=username).first()
@@ -35,6 +61,7 @@ def login():
                 next_page = None
             return redirect(next_page or url_for('main.dashboard'))
         else:
+            _record_attempt(client_ip)
             flash('用户名或密码错误', 'error')
 
     return render_template('auth/login.html')

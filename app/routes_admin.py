@@ -107,6 +107,9 @@ def settings():
                 'site_title', 'site_description']
         for key in keys:
             val = request.form.get(key, '')
+            # Don't overwrite the API key if the submitted value is empty or masked
+            if key == 'llm_api_key' and (not val or val.strip('*') == ''):
+                continue
             SystemSetting.set(key, val)
         flash('设置已保存', 'success')
         return redirect(url_for('admin.settings'))

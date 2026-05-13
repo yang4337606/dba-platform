@@ -10,6 +10,7 @@
 </div>
 
 <form method="POST">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
     <!-- LLM Configuration -->
     <div class="card">
@@ -27,7 +28,7 @@
       </div>
       <div class="form-group">
         <label class="form-label">API Key</label>
-        <input type="password" name="llm_api_key" class="form-input" value="{{ settings.get('llm_api_key', '') }}" placeholder="sk-...">
+        <input type="password" name="llm_api_key" class="form-input" value="{{ '********' if settings.get('llm_api_key') else '' }}" placeholder="sk-... (留空保持现有密钥不变)">
       </div>
       <div class="form-group">
         <label class="form-label">API URL (自定义时填写)</label>

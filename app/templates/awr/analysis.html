@@ -20,7 +20,10 @@
       {% if analysis.analysis_type == 'llm' %}<span class="llm-badge" style="margin-left:8px;">LLM增强</span>{% endif %}
     </div>
   </div>
-  <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">返回报告</a>
+  <div class="btn-group">
+    <a href="{{ url_for('awr.export_analysis', report_id=report.id, analysis_id=analysis.id) }}" class="btn btn-secondary">导出JSON</a>
+    <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">返回报告</a>
+  </div>
 </div>
 
 <!-- 1. Health Level + Composite Score -->

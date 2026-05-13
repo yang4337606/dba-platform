@@ -6,6 +6,7 @@
     <div class="login-title">DBA Platform</div>
     <div class="login-subtitle">Oracle AWR 分析 &middot; 知识库 &middot; 自动化运维</div>
     <form method="POST">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="form-group">
         <label class="form-label">用户名</label>
         <input type="text" name="username" class="form-input" required autofocus>

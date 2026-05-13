@@ -7,6 +7,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('awr.compare_reports') }}">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
     <div class="analysis-section">
       <div class="analysis-header">基准报告 (变更前)</div>

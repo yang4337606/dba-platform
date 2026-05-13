@@ -1,6 +1,8 @@
 import os
 import json
-from flask import Flask
+import hashlib
+import hmac
+from flask import Flask, request, session, abort
 from flask_login import LoginManager
 from .config import Config
 from .models import db, User, KnowledgeRule, SystemSetting
@@ -25,6 +27,23 @@ def create_app():
 
     db.init_app(app)
     login_manager.init_app(app)
+
+    # Simple CSRF protection
+    @app.before_request
+    def csrf_protect():
+        if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+            token = request.form.get('_csrf_token') or request.headers.get('X-CSRF-Token')
+            if not token or not hmac.compare_digest(token, _generate_csrf_token()):
+                abort(403)
+
+    def _generate_csrf_token():
+        if '_csrf_token' not in session:
+            session['_csrf_token'] = hashlib.sha256(os.urandom(32)).hexdigest()
+        return session['_csrf_token']
+
+    @app.context_processor
+    def inject_csrf_token():
+        return dict(csrf_token=_generate_csrf_token)
 
     # Register blueprints
     from .routes_auth import auth_bp
