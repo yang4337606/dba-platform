@@ -782,19 +782,23 @@ MESSAGES = {
 
 def get_lang():
     """Get current language from session, cookie, Accept-Language header, or default."""
-    # 1. Explicit session override
-    lang = session.get('lang')
-    if lang in SUPPORTED_LANGS:
-        return lang
-    # 2. Query parameter (also persists to session)
-    lang = request.args.get('lang')
-    if lang in SUPPORTED_LANGS:
-        session['lang'] = lang
-        return lang
-    # 3. Accept-Language header
-    accept = request.accept_languages.best_match(SUPPORTED_LANGS)
-    if accept:
-        return accept
+    try:
+        # 1. Explicit session override
+        lang = session.get('lang')
+        if lang in SUPPORTED_LANGS:
+            return lang
+        # 2. Query parameter (also persists to session)
+        lang = request.args.get('lang')
+        if lang in SUPPORTED_LANGS:
+            session['lang'] = lang
+            return lang
+        # 3. Accept-Language header
+        accept = request.accept_languages.best_match(SUPPORTED_LANGS)
+        if accept:
+            return accept
+    except RuntimeError:
+        # Outside of request context (e.g. background threads)
+        pass
     return DEFAULT_LANG
 
 

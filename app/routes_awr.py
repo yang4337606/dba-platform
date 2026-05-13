@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
@@ -20,6 +21,70 @@ awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
 # Thread pool for async analysis (max 2 concurrent analyses)
 _analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='awr_analysis')
+
+
+def _parse_oracle_datetime(date_str):
+    """Parse Oracle AWR date string to Python datetime object.
+
+    Handles formats:
+      - '18-Jun-25 00:00:28'     (DD-Mon-YY HH:MM:SS)
+      - '18-Jun-2025 00:00:28'   (DD-Mon-YYYY HH:MM:SS)
+      - '17-Nov-19 00:00:08'     (DD-Mon-YY HH:MM:SS)
+      - '06/18/25 00:00:28'      (MM/DD/YY HH:MM:SS)
+      - '07-1月 -23 14:00:47'    (Chinese locale: DD-M月-YY HH:MM:SS)
+      - '07-1\ufffd\ufffd -23 14:00:47'  (corrupted Chinese locale)
+    Returns None if parsing fails or input is empty/None.
+    """
+    if not date_str or not isinstance(date_str, str):
+        return None
+    date_str = date_str.strip()
+    if not date_str:
+        return None
+    # Already a datetime object (defensive)
+    if isinstance(date_str, datetime):
+        return date_str
+
+    # Standard Oracle formats
+    formats = [
+        '%d-%b-%y %H:%M:%S',      # 18-Jun-25 00:00:28
+        '%d-%b-%Y %H:%M:%S',      # 18-Jun-2025 00:00:28
+        '%d-%b-%y %H:%M',         # 18-Jun-25 00:00
+        '%d-%b-%Y %H:%M',         # 18-Jun-2025 00:00
+        '%d/%b/%y %H:%M:%S',      # 18/Jun/25 00:00:28
+        '%d/%b/%Y %H:%M:%S',      # 18/Jun/2025 00:00:28
+        '%m/%d/%y %H:%M:%S',      # 06/18/25 00:00:28
+        '%m/%d/%Y %H:%M:%S',      # 06/18/2025 00:00:28
+        '%Y-%m-%d %H:%M:%S',      # 2025-06-18 00:00:28
+        '%Y-%m-%dT%H:%M:%S',      # 2025-06-18T00:00:28
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+
+    # Handle Chinese locale dates: "07-1月 -23 14:00:47" or corrupted variants
+    # Pattern: DD-<month_num><月 or garbage><space>-YY HH:MM:SS
+    cn_match = re.match(
+        r'(\d{1,2})[-/]\s*(\d{1,2})\s*\S*\s*[-/]\s*(\d{2,4})\s+(\d{1,2}:\d{2}(?::\d{2})?)',
+        date_str
+    )
+    if cn_match:
+        day, month, year, time_part = cn_match.groups()
+        try:
+            year_int = int(year)
+            if year_int < 100:
+                year_int += 2000
+            time_parts = time_part.split(':')
+            hour = int(time_parts[0])
+            minute = int(time_parts[1])
+            second = int(time_parts[2]) if len(time_parts) > 2 else 0
+            return datetime(year_int, int(month), int(day), hour, minute, second)
+        except (ValueError, TypeError):
+            pass
+
+    logger.warning(f"Could not parse Oracle datetime string: {date_str!r}")
+    return None
 
 
 def _allowed_file(filename):
@@ -96,8 +161,8 @@ def upload():
                 platform=db_info.get('platform', ''),
                 snap_begin_id=snap_info.get('begin_id'),
                 snap_end_id=snap_info.get('end_id'),
-                snap_begin_time=snap_info.get('snap_begin') or snap_info.get('begin_time'),
-                snap_end_time=snap_info.get('snap_end') or snap_info.get('end_time'),
+                snap_begin_time=_parse_oracle_datetime(snap_info.get('snap_begin') or snap_info.get('begin_time')),
+                snap_end_time=_parse_oracle_datetime(snap_info.get('snap_end') or snap_info.get('end_time')),
                 elapsed_seconds=snap_info.get('elapsed_seconds'),
                 upload_user_id=current_user.id,
                 status='parsed',

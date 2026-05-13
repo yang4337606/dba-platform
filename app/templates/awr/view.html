@@ -44,7 +44,7 @@
     <div class="stat-label">{{ _('label_host') }}</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="font-size:16px;">{{ report.elapsed_seconds or 'N/A' }}s</div>
+    <div class="stat-value" style="font-size:16px;">{{ "%.1f"|format(report.elapsed_seconds) if report.elapsed_seconds else 'N/A' }}s</div>
     <div class="stat-label">{{ _('label_elapsed') }}</div>
   </div>
 </div>

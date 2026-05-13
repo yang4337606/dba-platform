@@ -257,7 +257,10 @@ class AWRParser:
                                 if not result['begin_id']:
                                     result['begin_id'] = cell.strip()
                                     continue
-                            if re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
+                            # Match standard Oracle date (DD-Mon-YY) or Chinese/corrupted locale dates
+                            if re.search(r'\d{1,2}[-/].{1,10}[-/\s]\d{2,4}\s+\d{1,2}:\d{2}', cell):
+                                result['snap_begin'] = cell.strip()
+                            elif re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
                                 result['snap_begin'] = cell.strip()
                     elif 'end' in row_text and 'snap' in row_text:
                         for cell in cells:
@@ -265,7 +268,9 @@ class AWRParser:
                                 if not result['end_id']:
                                     result['end_id'] = cell.strip()
                                     continue
-                            if re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
+                            if re.search(r'\d{1,2}[-/].{1,10}[-/\s]\d{2,4}\s+\d{1,2}:\d{2}', cell):
+                                result['snap_end'] = cell.strip()
+                            elif re.search(r'\d{1,2}[-/]\w{3}[-/]\d{2,4}', cell):
                                 result['snap_end'] = cell.strip()
                     elif 'elapsed' in row_text:
                         for cell in cells:
