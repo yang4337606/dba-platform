@@ -1,5 +1,7 @@
 import os
 import json
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app
 from flask_login import login_required, current_user
@@ -12,7 +14,11 @@ from .awr import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer
                    AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer,
                    WorkloadClassifier)
 
+logger = logging.getLogger(__name__)
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
+
+# Thread pool for async analysis (max 2 concurrent analyses)
+_analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='awr_analysis')
 
 
 def _allowed_file(filename):
@@ -661,203 +667,237 @@ def analyze_report(report_id):
 
     report = AWRReport.query.get_or_404(report_id)
 
-    # Reconstruct parsed data from stored metrics
-    parsed_data = _reconstruct_parsed_data(report)
+    # Prevent duplicate analysis submissions
+    if report.status == 'analyzing':
+        flash('分析正在进行中，请稍后刷新查看结果', 'info')
+        return redirect(url_for('awr.view_report', report_id=report_id))
 
-    # Step 0.5: Workload Classification (adjusts scoring thresholds)
-    workload_classifier = WorkloadClassifier()
-    workload_info = workload_classifier.classify(parsed_data)
-    threshold_overrides = workload_info.get('threshold_adjustments', {})
-
-    # Step 1: Score metrics (with workload-aware thresholds)
-    scorer = MetricScorer()
-    problems = scorer.score_all(parsed_data, report, threshold_overrides=threshold_overrides)
-
-    # Step 2: Correlate
-    correlator = CorrelationAnalyzer()
-    correlations = correlator.analyze(parsed_data, problems)
-
-    # Step 3: Baseline compare
-    comparer = BaselineComparer()
-    deviations = comparer.compare(report, parsed_data, db.session)
-
-    # Step 3.5: SQL Anti-Pattern Detection
-    anti_pattern_detector = SQLAntiPatternDetector()
-    sql_anti_patterns = anti_pattern_detector.detect_from_parsed(parsed_data)
-    # Convert anti-pattern findings into problem format
-    for ap in sql_anti_patterns:
-        problems.append({
-            'problem_type': 'sql_anti_pattern',
-            'title': f"SQL反模式: {ap['anti_pattern']} (SQL_ID={ap['sql_id']})",
-            'severity': ap['severity'],
-            'health_level': 'warning' if ap['severity'] in ('low', 'medium') else 'serious',
-            'metric_name': f"anti_pattern_{ap['anti_pattern'].lower()}",
-            'metric_value': None,
-            'metric_unit': '',
-            'evidence': f"{ap['description']}\nSQL片段: {ap['sql_snippet'][:100]}",
-            'threshold_warning': None,
-            'threshold_serious': None,
-        })
-
-    # Step 3.6: Wait Class Aggregation
-    wait_class_totals = {}
-    for evt in parsed_data.get('top_events', []):
-        wclass = evt.get('wait_class') or classify_wait_event(evt.get('event', evt.get('name', '')))
-        pct = float(evt.get('pct_db_time', 0) or 0)
-        wait_class_totals[wclass] = wait_class_totals.get(wclass, 0) + pct
-    # Flag if any non-idle wait class dominates
-    for wclass, total_pct in wait_class_totals.items():
-        if wclass in ('Idle', 'Other'):
-            continue
-        if total_pct > 40:
-            correlations.append({
-                'title': f'Wait Class "{wclass}" 累计占 DB Time {total_pct:.1f}%',
-                'trigger_problem': f'{wclass} 类等待事件汇总',
-                'related_evidence': [f'{wclass} 类事件合计 {total_pct:.1f}% DB Time'],
-                'root_cause': f'{wclass} 类等待是主要性能瓶颈方向',
-                'suggestion': f'重点关注 {wclass} 类下的各具体等待事件',
-            })
-
-    # Step 3.7: Parameter recommendations and version notes
-    param_recommendations = get_parameter_recommendations(problems, parsed_data)
-    version_notes = get_version_specific_notes(
-        parsed_data.get('db_info', {}).get('db_version', ''))
-
-    # Step 3.8: Advisory Analysis
-    advisory_analyzer = AdvisoryAnalyzer()
-    advisory_recommendations = advisory_analyzer.analyze(parsed_data.get('advisories', {}))
-
-    # Step 3.9: Time Model Analysis
-    time_model_analyzer = TimeModelAnalyzer()
-    # Get DB Time from load profile
-    lp = parsed_data.get('load_profile', {})
-    lp_computed = lp.get('computed', {}) if isinstance(lp, dict) else {}
-    db_time_total = float(lp_computed.get('db_time', 0) or 0) * float(parsed_data.get('snap_info', {}).get('elapsed_seconds', 0) or 0)
-    time_model_findings = time_model_analyzer.analyze(parsed_data.get('time_model', {}), db_time_total)
-
-    # Step 3.10: Wait Histogram Analysis
-    histogram_analyzer = WaitHistogramAnalyzer()
-    histogram_findings = histogram_analyzer.analyze(parsed_data.get('wait_histogram', []))
-
-    # Step 4: LLM enhancement (optional)
     use_llm = request.form.get('use_llm') == 'on'
-    llm_result = None
-    llm_patterns = []
-    if use_llm:
-        llm_provider = SystemSetting.get('llm_provider', 'none')
-        llm_key = SystemSetting.get('llm_api_key', '')
-        llm_url = SystemSetting.get('llm_api_url', '')
-        llm_model = SystemSetting.get('llm_model', '')
-        if llm_provider != 'none' and llm_key:
-            llm = LLMIntegration(llm_provider, llm_key, llm_url, llm_model)
-            llm_result = llm.enhance_analysis(
-                parsed_data, problems, correlations,
-                anti_patterns=sql_anti_patterns,
-                wait_class_summary=wait_class_totals,
-                param_recommendations=param_recommendations,
-            )
-            llm_patterns = llm_result.get('learned_patterns', []) if isinstance(llm_result, dict) else []
+    user_id = current_user.id
+    ip_address = request.remote_addr
 
-    # Step 5: Determine overall health level and composite score
-    all_problems = problems + deviations
-    health_level = 'healthy'
-    for p in all_problems:
-        p_level = p.get('health_level', p.get('severity', 'medium'))
-        if p_level in ('serious', 'critical', 'high'):
-            health_level = 'serious'
-            break
-        elif p_level in ('warning', 'medium'):
-            health_level = 'warning'
-
-    composite_score = compute_composite_health_score(problems, correlations, deviations)
-
-    # Step 6: Build summary string
-    db_info = parsed_data.get('db_info', {})
-    snap_info = parsed_data.get('snap_info', {})
-    summary_parts = [
-        f"数据库: {db_info.get('db_name', 'N/A')}/{db_info.get('instance_name', 'N/A')}",
-        f"版本: {db_info.get('db_version', 'N/A')}",
-        f"快照: {snap_info.get('begin_id', 'N/A')} - {snap_info.get('end_id', 'N/A')}",
-        f"持续时间: {snap_info.get('elapsed_seconds', 'N/A')}秒",
-        f"健康评分: {composite_score}/100 ({health_level})",
-        f"发现问题: {len(all_problems)}个",
-    ]
-    if sql_anti_patterns:
-        summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
-    if param_recommendations:
-        summary_parts.append(f"参数建议: {len(param_recommendations)}个")
-    if advisory_recommendations:
-        summary_parts.append(f"Advisory建议: {len(advisory_recommendations)}个")
-    if time_model_findings:
-        summary_parts.append(f"时间模型发现: {len(time_model_findings)}个")
-    summary_parts.append(f"负载类型: {workload_info['workload_type']}")
-    if llm_result:
-        summary_parts.append("(含LLM增强分析)")
-    summary = ' | '.join(summary_parts)
-
-    # Step 7: Create AWRAnalysisResult
-    # Merge correlations with param recommendations and version notes into recommendations
-    full_recommendations = {
-        'correlations': correlations,
-        'parameter_recommendations': param_recommendations,
-        'version_notes': version_notes,
-        'composite_score': composite_score,
-        'advisory_recommendations': advisory_recommendations,
-        'time_model_findings': time_model_findings,
-        'histogram_findings': histogram_findings,
-        'workload_info': workload_info,
-    }
-    analysis = AWRAnalysisResult(
-        report_id=report.id,
-        analysis_type='combined' if llm_result else 'rule',
-        health_level=health_level,
-        summary=summary,
-        problems_json=json.dumps(all_problems, ensure_ascii=False, default=str),
-        recommendations_json=json.dumps(full_recommendations, ensure_ascii=False, default=str),
-        correlation_findings_json=json.dumps(correlations, ensure_ascii=False, default=str),
-        llm_provider=SystemSetting.get('llm_provider') if llm_result else None,
-        llm_raw_response=json.dumps(llm_result, ensure_ascii=False, default=str) if llm_result else None,
-        llm_structured_json=json.dumps(llm_result.get('structured', {}), ensure_ascii=False, default=str) if isinstance(llm_result, dict) else None,
-        learned_patterns_json=json.dumps(llm_patterns, ensure_ascii=False, default=str) if llm_patterns else None,
-        analyst_id=current_user.id,
-    )
-    db.session.add(analysis)
-    db.session.flush()  # Get analysis.id for AWRProblem records
-
-    # Step 8: Create AWRProblem records
-    for p in problems:
-        problem_record = AWRProblem(
-            report_id=report.id,
-            analysis_id=analysis.id,
-            problem_type=p.get('problem_type', p.get('category', 'general')),
-            title=p.get('title', p.get('name', 'Unknown Problem')),
-            severity=p.get('severity', 'medium'),
-            health_level=p.get('health_level', 'warning'),
-            metric_name=p.get('metric_name', ''),
-            metric_value=p.get('metric_value'),
-            metric_unit=p.get('metric_unit', ''),
-            threshold_warning=p.get('threshold_warning'),
-            threshold_serious=p.get('threshold_serious'),
-            evidence=p.get('evidence', ''),
-            related_metrics_json=json.dumps(p.get('related_metrics', []), ensure_ascii=False, default=str) if p.get('related_metrics') else None,
-            correlation_chain=json.dumps(p.get('correlation_chain', []), ensure_ascii=False, default=str) if p.get('correlation_chain') else None,
-        )
-        db.session.add(problem_record)
-
-    # Step 9: Self-learning
-    learning_engine = LearningEngine()
-    learning_engine.process_analysis(report, problems, correlations, llm_patterns, db.session)
-
-    # Step 10: Update baseline
-    comparer.update_baseline(report, parsed_data, db.session)
-
-    # Step 11: Finalize
-    report.status = 'analyzed'
-    db.session.add(AuditLog(user_id=current_user.id, action='analyze_awr',
-                            detail=f'Report #{report.id}', ip_address=request.remote_addr))
+    # Mark report as analyzing
+    report.status = 'analyzing'
     db.session.commit()
-    flash('分析完成', 'success')
-    return redirect(url_for('awr.view_analysis', report_id=report.id, analysis_id=analysis.id))
+
+    # Submit analysis to thread pool for async execution
+    app = current_app._get_current_object()
+    _analysis_executor.submit(_run_analysis, app, report_id, user_id, use_llm, ip_address)
+
+    flash('分析已提交，请稍后刷新查看结果', 'info')
+    return redirect(url_for('awr.view_report', report_id=report_id))
+
+
+def _run_analysis(app, report_id, user_id, use_llm, ip_address):
+    """Run the full analysis pipeline in a background thread."""
+    with app.app_context():
+        try:
+            report = AWRReport.query.get(report_id)
+            if not report:
+                logger.error(f"Analysis failed: report {report_id} not found")
+                return
+
+            # Reconstruct parsed data from stored metrics
+            parsed_data = _reconstruct_parsed_data(report)
+
+            # Step 0.5: Workload Classification (adjusts scoring thresholds)
+            workload_classifier = WorkloadClassifier()
+            workload_info = workload_classifier.classify(parsed_data)
+            threshold_overrides = workload_info.get('threshold_adjustments', {})
+
+            # Step 1: Score metrics (with workload-aware thresholds)
+            scorer = MetricScorer()
+            problems = scorer.score_all(parsed_data, report, threshold_overrides=threshold_overrides)
+
+            # Step 2: Correlate
+            correlator = CorrelationAnalyzer()
+            correlations = correlator.analyze(parsed_data, problems)
+
+            # Step 3: Baseline compare
+            comparer = BaselineComparer()
+            deviations = comparer.compare(report, parsed_data, db.session)
+
+            # Step 3.5: SQL Anti-Pattern Detection
+            anti_pattern_detector = SQLAntiPatternDetector()
+            sql_anti_patterns = anti_pattern_detector.detect_from_parsed(parsed_data)
+            for ap in sql_anti_patterns:
+                problems.append({
+                    'problem_type': 'sql_anti_pattern',
+                    'title': f"SQL反模式: {ap['anti_pattern']} (SQL_ID={ap['sql_id']})",
+                    'severity': ap['severity'],
+                    'health_level': 'warning' if ap['severity'] in ('low', 'medium') else 'serious',
+                    'metric_name': f"anti_pattern_{ap['anti_pattern'].lower()}",
+                    'metric_value': None,
+                    'metric_unit': '',
+                    'evidence': f"{ap['description']}\nSQL片段: {ap['sql_snippet'][:100]}",
+                    'threshold_warning': None,
+                    'threshold_serious': None,
+                })
+
+            # Step 3.6: Wait Class Aggregation
+            wait_class_totals = {}
+            for evt in parsed_data.get('top_events', []):
+                wclass = evt.get('wait_class') or classify_wait_event(evt.get('event', evt.get('name', '')))
+                pct = float(evt.get('pct_db_time', 0) or 0)
+                wait_class_totals[wclass] = wait_class_totals.get(wclass, 0) + pct
+            for wclass, total_pct in wait_class_totals.items():
+                if wclass in ('Idle', 'Other'):
+                    continue
+                if total_pct > 40:
+                    correlations.append({
+                        'title': f'Wait Class "{wclass}" 累计占 DB Time {total_pct:.1f}%',
+                        'trigger_problem': f'{wclass} 类等待事件汇总',
+                        'related_evidence': [f'{wclass} 类事件合计 {total_pct:.1f}% DB Time'],
+                        'root_cause': f'{wclass} 类等待是主要性能瓶颈方向',
+                        'suggestion': f'重点关注 {wclass} 类下的各具体等待事件',
+                    })
+
+            # Step 3.7: Parameter recommendations and version notes
+            param_recommendations = get_parameter_recommendations(problems, parsed_data)
+            version_notes = get_version_specific_notes(
+                parsed_data.get('db_info', {}).get('db_version', ''))
+
+            # Step 3.8: Advisory Analysis
+            advisory_analyzer = AdvisoryAnalyzer()
+            advisory_recommendations = advisory_analyzer.analyze(parsed_data.get('advisories', {}))
+
+            # Step 3.9: Time Model Analysis
+            time_model_analyzer = TimeModelAnalyzer()
+            lp = parsed_data.get('load_profile', {})
+            lp_computed = lp.get('computed', {}) if isinstance(lp, dict) else {}
+            db_time_total = float(lp_computed.get('db_time', 0) or 0) * float(parsed_data.get('snap_info', {}).get('elapsed_seconds', 0) or 0)
+            time_model_findings = time_model_analyzer.analyze(parsed_data.get('time_model', {}), db_time_total)
+
+            # Step 3.10: Wait Histogram Analysis
+            histogram_analyzer = WaitHistogramAnalyzer()
+            histogram_findings = histogram_analyzer.analyze(parsed_data.get('wait_histogram', []))
+
+            # Step 4: LLM enhancement (optional)
+            llm_result = None
+            llm_patterns = []
+            if use_llm:
+                llm_provider = SystemSetting.get('llm_provider', 'none')
+                llm_key = SystemSetting.get('llm_api_key', '')
+                llm_url = SystemSetting.get('llm_api_url', '')
+                llm_model = SystemSetting.get('llm_model', '')
+                if llm_provider != 'none' and llm_key:
+                    llm = LLMIntegration(llm_provider, llm_key, llm_url, llm_model)
+                    llm_result = llm.enhance_analysis(
+                        parsed_data, problems, correlations,
+                        anti_patterns=sql_anti_patterns,
+                        wait_class_summary=wait_class_totals,
+                        param_recommendations=param_recommendations,
+                    )
+                    llm_patterns = llm_result.get('learned_patterns', []) if isinstance(llm_result, dict) else []
+
+            # Step 5: Determine overall health level and composite score
+            all_problems = problems + deviations
+            health_level = 'healthy'
+            for p in all_problems:
+                p_level = p.get('health_level', p.get('severity', 'medium'))
+                if p_level in ('serious', 'critical', 'high'):
+                    health_level = 'serious'
+                    break
+                elif p_level in ('warning', 'medium'):
+                    health_level = 'warning'
+
+            composite_score = compute_composite_health_score(problems, correlations, deviations)
+
+            # Step 6: Build summary string
+            db_info = parsed_data.get('db_info', {})
+            snap_info = parsed_data.get('snap_info', {})
+            summary_parts = [
+                f"数据库: {db_info.get('db_name', 'N/A')}/{db_info.get('instance_name', 'N/A')}",
+                f"版本: {db_info.get('db_version', 'N/A')}",
+                f"快照: {snap_info.get('begin_id', 'N/A')} - {snap_info.get('end_id', 'N/A')}",
+                f"持续时间: {snap_info.get('elapsed_seconds', 'N/A')}秒",
+                f"健康评分: {composite_score}/100 ({health_level})",
+                f"发现问题: {len(all_problems)}个",
+            ]
+            if sql_anti_patterns:
+                summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
+            if param_recommendations:
+                summary_parts.append(f"参数建议: {len(param_recommendations)}个")
+            if advisory_recommendations:
+                summary_parts.append(f"Advisory建议: {len(advisory_recommendations)}个")
+            if time_model_findings:
+                summary_parts.append(f"时间模型发现: {len(time_model_findings)}个")
+            summary_parts.append(f"负载类型: {workload_info['workload_type']}")
+            if llm_result:
+                summary_parts.append("(含LLM增强分析)")
+            summary = ' | '.join(summary_parts)
+
+            # Step 7: Create AWRAnalysisResult
+            full_recommendations = {
+                'correlations': correlations,
+                'parameter_recommendations': param_recommendations,
+                'version_notes': version_notes,
+                'composite_score': composite_score,
+                'advisory_recommendations': advisory_recommendations,
+                'time_model_findings': time_model_findings,
+                'histogram_findings': histogram_findings,
+                'workload_info': workload_info,
+            }
+            analysis = AWRAnalysisResult(
+                report_id=report.id,
+                analysis_type='combined' if llm_result else 'rule',
+                health_level=health_level,
+                summary=summary,
+                problems_json=json.dumps(all_problems, ensure_ascii=False, default=str),
+                recommendations_json=json.dumps(full_recommendations, ensure_ascii=False, default=str),
+                correlation_findings_json=json.dumps(correlations, ensure_ascii=False, default=str),
+                llm_provider=SystemSetting.get('llm_provider') if llm_result else None,
+                llm_raw_response=json.dumps(llm_result, ensure_ascii=False, default=str) if llm_result else None,
+                llm_structured_json=json.dumps(llm_result.get('structured', {}), ensure_ascii=False, default=str) if isinstance(llm_result, dict) else None,
+                learned_patterns_json=json.dumps(llm_patterns, ensure_ascii=False, default=str) if llm_patterns else None,
+                analyst_id=user_id,
+            )
+            db.session.add(analysis)
+            db.session.flush()
+
+            # Step 8: Create AWRProblem records
+            for p in problems:
+                problem_record = AWRProblem(
+                    report_id=report.id,
+                    analysis_id=analysis.id,
+                    problem_type=p.get('problem_type', p.get('category', 'general')),
+                    title=p.get('title', p.get('name', 'Unknown Problem')),
+                    severity=p.get('severity', 'medium'),
+                    health_level=p.get('health_level', 'warning'),
+                    metric_name=p.get('metric_name', ''),
+                    metric_value=p.get('metric_value'),
+                    metric_unit=p.get('metric_unit', ''),
+                    threshold_warning=p.get('threshold_warning'),
+                    threshold_serious=p.get('threshold_serious'),
+                    evidence=p.get('evidence', ''),
+                    related_metrics_json=json.dumps(p.get('related_metrics', []), ensure_ascii=False, default=str) if p.get('related_metrics') else None,
+                    correlation_chain=json.dumps(p.get('correlation_chain', []), ensure_ascii=False, default=str) if p.get('correlation_chain') else None,
+                )
+                db.session.add(problem_record)
+
+            # Step 9: Self-learning
+            learning_engine = LearningEngine()
+            learning_engine.process_analysis(report, problems, correlations, llm_patterns, db.session)
+
+            # Step 10: Update baseline
+            comparer.update_baseline(report, parsed_data, db.session)
+
+            # Step 11: Finalize
+            report.status = 'analyzed'
+            db.session.add(AuditLog(user_id=user_id, action='analyze_awr',
+                                    detail=f'Report #{report.id}', ip_address=ip_address))
+            db.session.commit()
+            logger.info(f"Analysis completed for report #{report_id}")
+
+        except Exception as e:
+            logger.error(f"Analysis failed for report #{report_id}: {e}", exc_info=True)
+            try:
+                report = AWRReport.query.get(report_id)
+                if report:
+                    report.status = 'error'
+                    db.session.commit()
+            except Exception:
+                logger.error(f"Failed to update report status for #{report_id}", exc_info=True)
 
 
 @awr_bp.route('/<int:report_id>/analysis/<int:analysis_id>')
