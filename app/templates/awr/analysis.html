@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}分析报告 #{{ analysis.id }}{% endblock %}
 {% block content %}
+
+{# Extract recommendation sub-fields safely #}
+{% set rec_correlations = recommendations.get('correlations', []) if recommendations is mapping else [] %}
+{% set param_recs = recommendations.get('parameter_recommendations', []) if recommendations is mapping else [] %}
+{% set version_notes = recommendations.get('version_notes', []) if recommendations is mapping else [] %}
+{% set composite_score = recommendations.get('composite_score', none) if recommendations is mapping else none %}
+{% set advisory_recs = recommendations.get('advisory_recommendations', []) if recommendations is mapping else [] %}
+{% set time_model = recommendations.get('time_model_findings', []) if recommendations is mapping else [] %}
+{% set histogram = recommendations.get('histogram_findings', []) if recommendations is mapping else [] %}
+
 <div class="page-header">
   <div>
     <h1 class="page-title">分析报告 #{{ analysis.id }}</h1>
@@ -12,11 +22,28 @@
   <a href="{{ url_for('awr.view_report', report_id=report.id) }}" class="btn btn-secondary">返回报告</a>
 </div>
 
-<!-- Health Level -->
+<!-- 1. Health Level + Composite Score -->
 <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px;">
   <span class="badge badge-{% if analysis.health_level == 'healthy' %}success{% elif analysis.health_level == 'warning' %}warning{% else %}danger{% endif %}" style="font-size:18px;padding:12px 24px;">
     {{ analysis.health_level|upper }}
   </span>
+  {% if composite_score is not none %}
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="position:relative;width:56px;height:56px;">
+      <svg viewBox="0 0 36 36" style="width:56px;height:56px;transform:rotate(-90deg);">
+        <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              fill="none" stroke="var(--bg-tertiary)" stroke-width="3"/>
+        <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              fill="none"
+              stroke="{% if composite_score >= 80 %}var(--success){% elif composite_score >= 60 %}var(--warning){% else %}var(--danger){% endif %}"
+              stroke-width="3"
+              stroke-dasharray="{{ composite_score }}, 100"/>
+      </svg>
+      <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:14px;font-weight:700;">{{ composite_score }}</div>
+    </div>
+    <div style="font-size:12px;color:var(--text-secondary);">综合评分</div>
+  </div>
+  {% endif %}
   <div>
     <div style="font-size:18px;font-weight:700;">健康评估</div>
     <div style="font-size:13px;color:var(--text-secondary);">
@@ -27,7 +54,7 @@
   </div>
 </div>
 
-<!-- Summary -->
+<!-- 2. Summary -->
 {% if analysis.summary %}
 <div class="analysis-section">
   <div class="analysis-header">&#9632; 概览</div>
@@ -37,7 +64,7 @@
 </div>
 {% endif %}
 
-<!-- Problems -->
+<!-- 3. Problems -->
 {% if problems_list %}
 <div class="analysis-section">
   <div class="analysis-header">&#9670; 发现问题 ({{ problems_list|length }})</div>
@@ -62,7 +89,44 @@
 </div>
 {% endif %}
 
-<!-- Correlation Analysis -->
+<!-- 4. Time Model Breakdown -->
+{% if time_model %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9201; 时间模型分析 ({{ time_model|length }})</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>组件</th>
+            <th>% DB Time</th>
+            <th>发现</th>
+            <th>严重程度</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in time_model %}
+          <tr>
+            <td style="font-weight:600;">{{ t.component if t.component is defined else t.get('component', '-') }}</td>
+            <td style="font-family:var(--font-mono);">
+              {% if t.pct_db_time is defined %}{{ t.pct_db_time }}%{% else %}-{% endif %}
+            </td>
+            <td>{{ t.finding if t.finding is defined else '-' }}</td>
+            <td>
+              {% if t.severity is defined %}
+              <span class="badge badge-{% if t.severity == 'danger' or t.severity == 'critical' %}danger{% elif t.severity == 'warning' %}warning{% else %}info{% endif %}">{{ t.severity }}</span>
+              {% else %}-{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- 5. Correlation Analysis -->
 {% if correlations %}
 <div class="analysis-section">
   <div class="analysis-header">&#9733; 关联分析 ({{ correlations|length }})</div>
@@ -85,22 +149,90 @@
 </div>
 {% endif %}
 
-<!-- Recommendations -->
-{% if recommendations %}
+<!-- 6. Advisory Recommendations -->
+{% if advisory_recs %}
 <div class="analysis-section">
-  <div class="analysis-header" style="color:var(--warning);">&#9888; 优化建议 ({{ recommendations|length }})</div>
+  <div class="analysis-header" style="color:var(--warning);">&#9888; Advisory 建议 ({{ advisory_recs|length }})</div>
   <div class="analysis-body">
-    {% for rec in recommendations %}
-    <div class="finding-item">
-      <div class="finding-title">{{ rec.title }}</div>
-      <div class="finding-desc">{{ rec.root_cause }}</div>
-      {% if rec.related_evidence %}
-      <ul style="font-size:12px;margin-top:4px;">
-        {% for ev in rec.related_evidence %}<li>{{ ev }}</li>{% endfor %}
-      </ul>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Advisory 类型</th>
+            <th>当前大小</th>
+            <th>建议大小</th>
+            <th>收益说明</th>
+            <th>严重程度</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in advisory_recs %}
+          <tr>
+            <td style="font-weight:600;">{{ a.advisory_type if a.advisory_type is defined else '-' }}</td>
+            <td style="font-family:var(--font-mono);">{{ a.current_size if a.current_size is defined else '-' }}</td>
+            <td style="font-family:var(--font-mono);">{{ a.recommended_size if a.recommended_size is defined else '-' }}</td>
+            <td>{{ a.benefit if a.benefit is defined else '-' }}</td>
+            <td>
+              {% if a.severity is defined %}
+              <span class="badge badge-{% if a.severity == 'danger' or a.severity == 'critical' %}danger{% elif a.severity == 'warning' %}warning{% else %}info{% endif %}">{{ a.severity }}</span>
+              {% else %}-{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- 7. Parameter Recommendations -->
+{% if param_recs %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9881; 参数优化建议 ({{ param_recs|length }})</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>参数</th>
+            <th>建议</th>
+            <th>说明</th>
+            <th>触发条件</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pr in param_recs %}
+          <tr>
+            <td style="font-family:var(--font-mono);font-weight:600;">{{ pr.parameter if pr.parameter is defined else '-' }}</td>
+            <td>{{ pr.recommendation if pr.recommendation is defined else '-' }}</td>
+            <td style="font-size:12px;">{{ pr.description if pr.description is defined else '-' }}</td>
+            <td style="font-size:12px;color:var(--text-muted);">{{ pr.trigger if pr.trigger is defined else '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- 8. Version Diagnostics -->
+{% if version_notes %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9432; 版本诊断信息 ({{ version_notes|length }})</div>
+  <div class="analysis-body">
+    {% for vn in version_notes %}
+    <div class="finding-item" style="background:var(--bg-tertiary);border-radius:8px;padding:12px 16px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge badge-info">版本信息</span>
+        <span class="finding-title">{{ vn.title if vn.title is defined else vn }}</span>
+      </div>
+      {% if vn.description is defined %}
+      <div class="finding-desc">{{ vn.description }}</div>
       {% endif %}
-      {% if rec.suggestion %}
-      <div class="finding-solution">{{ rec.suggestion }}</div>
+      {% if vn.detail is defined %}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">{{ vn.detail }}</div>
       {% endif %}
     </div>
     {% endfor %}
@@ -108,7 +240,40 @@
 </div>
 {% endif %}
 
-<!-- LLM Analysis -->
+<!-- 9. Wait Histogram Analysis -->
+{% if histogram %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9776; 等待直方图分析 ({{ histogram|length }})</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>等待事件</th>
+            <th>模式</th>
+            <th>P95 Bucket</th>
+            <th>P99 Bucket</th>
+            <th>发现</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in histogram %}
+          <tr>
+            <td style="font-weight:600;">{{ h.event if h.event is defined else '-' }}</td>
+            <td>{{ h.pattern if h.pattern is defined else '-' }}</td>
+            <td style="font-family:var(--font-mono);">{{ h.p95_bucket if h.p95_bucket is defined else '-' }}</td>
+            <td style="font-family:var(--font-mono);">{{ h.p99_bucket if h.p99_bucket is defined else '-' }}</td>
+            <td style="font-size:12px;">{{ h.finding if h.finding is defined else '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- 10. LLM Analysis -->
 {% if analysis.llm_raw_response %}
 <div class="analysis-section" style="border-color:rgba(168,85,247,0.3);">
   <div class="analysis-header">
@@ -137,4 +302,5 @@
   </div>
 </div>
 {% endif %}
+
 {% endblock %}

@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}AWR对比结果{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">AWR报告对比结果</h1>
+    <div class="page-subtitle">
+      #{{ report_a.id }} {{ report_a.title }} vs #{{ report_b.id }} {{ report_b.title }}
+    </div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary">重新选择</a>
+    <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+  </div>
+</div>
+
+<!-- Report Info Comparison -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
+  <div class="analysis-section">
+    <div class="analysis-header">基准报告 (A)</div>
+    <div class="analysis-body">
+      <table>
+        <tbody>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">数据库</td><td style="font-size:12px;">{{ report_a.db_name or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">版本</td><td style="font-size:12px;">{{ report_a.db_version or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">采集时长</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_a.elapsed_seconds or 'N/A' }}s</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">快照范围</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_a.snap_begin_id or '?' }} - #{{ report_a.snap_end_id or '?' }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="analysis-section">
+    <div class="analysis-header">对比报告 (B)</div>
+    <div class="analysis-body">
+      <table>
+        <tbody>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">数据库</td><td style="font-size:12px;">{{ report_b.db_name or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">版本</td><td style="font-size:12px;">{{ report_b.db_version or 'N/A' }}</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">采集时长</td><td style="font-size:12px;font-family:var(--font-mono);">{{ report_b.elapsed_seconds or 'N/A' }}s</td></tr>
+          <tr><td style="font-size:12px;color:var(--text-secondary);">快照范围</td><td style="font-size:12px;font-family:var(--font-mono);">#{{ report_b.snap_begin_id or '?' }} - #{{ report_b.snap_end_id or '?' }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Load Profile Changes -->
+{% if diff.get('load_profile') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9632; 负载概况变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <tbody>
+      {% for item in diff['load_profile'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change_pct > 0 %}#ef4444{% elif item.change_pct < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change_pct > 0 %}+{% endif %}{{ '%.1f'|format(item.change_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Wait Event Changes -->
+{% if diff.get('wait_events') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9670; 等待事件变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>事件</th><th>%DB Time (A)</th><th>%DB Time (B)</th><th>变化</th></tr></thead>
+      <tbody>
+      {% for item in diff['wait_events'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.event }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.pct_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.pct_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change > 0 %}#ef4444{% elif item.change < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change > 0 %}+{% endif %}{{ '%.2f'|format(item.change) }}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Efficiency Changes -->
+{% if diff.get('efficiency') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9679; 实例效率变化</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>值 (A)</th><th>值 (B)</th><th>变化</th></tr></thead>
+      <tbody>
+      {% for item in diff['efficiency'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change > 0 %}#ef4444{% elif item.change < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change > 0 %}+{% endif %}{{ '%.2f'|format(item.change) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Key Metrics Summary -->
+{% if diff.get('key_metrics') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9733; 关键指标摘要</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>报告A</th><th>报告B</th><th>变化%</th></tr></thead>
+      <tbody>
+      {% for item in diff['key_metrics'] %}
+      <tr>
+        <td style="font-size:12px;">{{ item.metric }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_a }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ item.value_b }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);color:{% if item.change_pct > 0 %}#ef4444{% elif item.change_pct < 0 %}#22c55e{% else %}var(--text-secondary){% endif %};">
+          {% if item.change_pct > 0 %}+{% endif %}{{ '%.1f'|format(item.change_pct) }}%
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if not diff.get('load_profile') and not diff.get('wait_events') and not diff.get('efficiency') and not diff.get('key_metrics') %}
+<div class="analysis-section">
+  <div class="analysis-body" style="text-align:center;padding:48px;color:var(--text-secondary);">
+    暂无可对比的指标数据。请确认两份报告均已解析完成。
+  </div>
+</div>
+{% endif %}
+{% endblock %}

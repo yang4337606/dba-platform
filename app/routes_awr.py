@@ -8,7 +8,8 @@ from .models import db, AWRReport, AWRMetric, AWRProblem, AWRAnalysisResult, Kno
 from .awr_engine import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineComparer,
                          LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event,
                          get_parameter_recommendations, get_version_specific_notes,
-                         compute_composite_health_score)
+                         compute_composite_health_score,
+                         AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer)
 
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
@@ -669,6 +670,22 @@ def analyze_report(report_id):
     version_notes = get_version_specific_notes(
         parsed_data.get('db_info', {}).get('db_version', ''))
 
+    # Step 3.8: Advisory Analysis
+    advisory_analyzer = AdvisoryAnalyzer()
+    advisory_recommendations = advisory_analyzer.analyze(parsed_data.get('advisories', {}))
+
+    # Step 3.9: Time Model Analysis
+    time_model_analyzer = TimeModelAnalyzer()
+    # Get DB Time from load profile
+    lp = parsed_data.get('load_profile', {})
+    lp_computed = lp.get('computed', {}) if isinstance(lp, dict) else {}
+    db_time_total = float(lp_computed.get('db_time', 0) or 0) * float(parsed_data.get('snap_info', {}).get('elapsed_seconds', 0) or 0)
+    time_model_findings = time_model_analyzer.analyze(parsed_data.get('time_model', {}), db_time_total)
+
+    # Step 3.10: Wait Histogram Analysis
+    histogram_analyzer = WaitHistogramAnalyzer()
+    histogram_findings = histogram_analyzer.analyze(parsed_data.get('wait_histogram', []))
+
     # Step 4: LLM enhancement (optional)
     use_llm = request.form.get('use_llm') == 'on'
     llm_result = None
@@ -716,6 +733,10 @@ def analyze_report(report_id):
         summary_parts.append(f"SQL反模式: {len(sql_anti_patterns)}个")
     if param_recommendations:
         summary_parts.append(f"参数建议: {len(param_recommendations)}个")
+    if advisory_recommendations:
+        summary_parts.append(f"Advisory建议: {len(advisory_recommendations)}个")
+    if time_model_findings:
+        summary_parts.append(f"时间模型发现: {len(time_model_findings)}个")
     if llm_result:
         summary_parts.append("(含LLM增强分析)")
     summary = ' | '.join(summary_parts)
@@ -727,6 +748,9 @@ def analyze_report(report_id):
         'parameter_recommendations': param_recommendations,
         'version_notes': version_notes,
         'composite_score': composite_score,
+        'advisory_recommendations': advisory_recommendations,
+        'time_model_findings': time_model_findings,
+        'histogram_findings': histogram_findings,
     }
     analysis = AWRAnalysisResult(
         report_id=report.id,
@@ -801,6 +825,105 @@ def view_analysis(report_id, analysis_id):
                            problems_list=problems_list, recommendations=recommendations,
                            correlations=correlations, llm_structured=llm_structured,
                            learned_patterns=learned_patterns)
+
+
+@awr_bp.route('/compare', methods=['GET', 'POST'])
+@login_required
+def compare_reports():
+    if request.method == 'POST':
+        report_id_a = request.form.get('report_a', type=int)
+        report_id_b = request.form.get('report_b', type=int)
+        if not report_id_a or not report_id_b:
+            flash('请选择两份报告进行对比', 'error')
+            return redirect(url_for('awr.compare_reports'))
+        return redirect(url_for('awr.compare_result', id_a=report_id_a, id_b=report_id_b))
+
+    # GET: show report selection
+    reports = AWRReport.query.filter(AWRReport.status.in_(['parsed', 'analyzed'])).order_by(AWRReport.created_at.desc()).limit(50).all()
+    return render_template('awr/compare_select.html', reports=reports)
+
+
+@awr_bp.route('/compare/<int:id_a>/<int:id_b>')
+@login_required
+def compare_result(id_a, id_b):
+    report_a = AWRReport.query.get_or_404(id_a)
+    report_b = AWRReport.query.get_or_404(id_b)
+
+    parsed_a = _reconstruct_parsed_data(report_a)
+    parsed_b = _reconstruct_parsed_data(report_b)
+
+    # Build comparison data
+    diff = _build_comparison(parsed_a, parsed_b, report_a, report_b)
+
+    return render_template('awr/compare_result.html',
+                          report_a=report_a, report_b=report_b, diff=diff)
+
+
+def _build_comparison(parsed_a, parsed_b, report_a, report_b):
+    """Build structured comparison between two AWR reports."""
+    diff = {
+        'load_profile': [],
+        'wait_events': [],
+        'efficiency': [],
+        'key_metrics': [],
+    }
+
+    # Compare load profile computed values
+    lp_a = parsed_a.get('load_profile', {})
+    lp_b = parsed_b.get('load_profile', {})
+    computed_a = lp_a.get('computed', {}) if isinstance(lp_a, dict) else {}
+    computed_b = lp_b.get('computed', {}) if isinstance(lp_b, dict) else {}
+
+    for key in set(list(computed_a.keys()) + list(computed_b.keys())):
+        val_a = float(computed_a.get(key, 0) or 0)
+        val_b = float(computed_b.get(key, 0) or 0)
+        change_pct = ((val_b - val_a) / val_a * 100) if val_a != 0 else 0
+        diff['load_profile'].append({
+            'metric': key,
+            'value_a': val_a,
+            'value_b': val_b,
+            'change_pct': round(change_pct, 1),
+            'direction': 'up' if val_b > val_a else ('down' if val_b < val_a else 'same'),
+        })
+
+    # Compare top wait events
+    events_a = {(e.get('event', e.get('name', ''))): e for e in parsed_a.get('top_events', [])}
+    events_b = {(e.get('event', e.get('name', ''))): e for e in parsed_b.get('top_events', [])}
+    all_events = set(list(events_a.keys()) + list(events_b.keys()))
+    for evt_name in all_events:
+        if not evt_name:
+            continue
+        ea = events_a.get(evt_name, {})
+        eb = events_b.get(evt_name, {})
+        pct_a = float(ea.get('pct_db_time', 0) or 0)
+        pct_b = float(eb.get('pct_db_time', 0) or 0)
+        diff['wait_events'].append({
+            'event': evt_name,
+            'pct_a': pct_a,
+            'pct_b': pct_b,
+            'change': round(pct_b - pct_a, 1),
+            'direction': 'up' if pct_b > pct_a else ('down' if pct_b < pct_a else 'same'),
+        })
+    diff['wait_events'].sort(key=lambda x: abs(x['change']), reverse=True)
+
+    # Compare instance efficiency
+    eff_a = parsed_a.get('instance_efficiency', {})
+    eff_b = parsed_b.get('instance_efficiency', {})
+    if isinstance(eff_a, list):
+        eff_a = {item.get('name', item.get('metric', '')): item.get('value', item.get('pct', 0)) for item in eff_a}
+    if isinstance(eff_b, list):
+        eff_b = {item.get('name', item.get('metric', '')): item.get('value', item.get('pct', 0)) for item in eff_b}
+    for key in set(list(eff_a.keys()) + list(eff_b.keys())):
+        val_a = float(eff_a.get(key, 0) or 0)
+        val_b = float(eff_b.get(key, 0) or 0)
+        diff['efficiency'].append({
+            'metric': key,
+            'value_a': val_a,
+            'value_b': val_b,
+            'change': round(val_b - val_a, 1),
+        })
+
+    return diff
 
 
 @awr_bp.route('/<int:report_id>/delete', methods=['POST'])

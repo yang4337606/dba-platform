@@ -18,6 +18,7 @@
       <button type="submit" class="btn btn-primary">执行分析</button>
     </form>
     {% endif %}
+    <a href="{{ url_for('awr.compare_reports') }}" class="btn btn-primary" style="background:var(--accent-secondary,#6366f1);">对比分析</a>
     <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
   </div>
 </div>
@@ -85,6 +86,104 @@
         <td style="font-size:12px;">{{ m.metric_name }}</td>
         <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
         <td style="font-size:12px;">{{ m.metric_unit }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Instance Efficiency -->
+{% if metrics_by_type.get('efficiency') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9679; 实例效率</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>指标</th><th>值(%)</th></tr></thead>
+      <tbody>
+      {% for m in metrics_by_type['efficiency'] %}
+      <tr>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Time Model -->
+{% if metrics_by_type.get('time_model') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9202; 时间模型</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>统计项</th><th>时间(s)</th><th>% DB Time</th></tr></thead>
+      <tbody>
+      {% for m in metrics_by_type['time_model'] %}
+      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+      <tr>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('pct_db_time', '-') }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Advisory -->
+{% if metrics_by_type.get('advisory') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9881; 建议信息</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>建议名称</th><th>值</th><th>详情</th></tr></thead>
+      <tbody>
+      {% for m in metrics_by_type['advisory'] %}
+      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+      <tr>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ m.metric_value }}</td>
+        <td style="font-size:12px;">{{ extra.get('details', '-') }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Wait Histogram -->
+{% if metrics_by_type.get('wait_histogram') %}
+<div class="analysis-section">
+  <div class="analysis-header">&#9776; 等待直方图</div>
+  <div class="analysis-body">
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>事件</th><th>&lt;1ms</th><th>1-4ms</th><th>4-16ms</th><th>16-64ms</th><th>64ms-1s</th><th>&gt;1s</th></tr></thead>
+      <tbody>
+      {% for m in metrics_by_type['wait_histogram'] %}
+      {% set extra = (m.extra_json|fromjson) if m.extra_json else {} %}
+      <tr>
+        <td style="font-size:12px;">{{ m.metric_name }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('lt_1ms', '-') }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('1_4ms', '-') }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('4_16ms', '-') }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('16_64ms', '-') }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('64ms_1s', '-') }}</td>
+        <td style="font-size:12px;font-family:var(--font-mono);">{{ extra.get('gt_1s', '-') }}</td>
       </tr>
       {% endfor %}
       </tbody>

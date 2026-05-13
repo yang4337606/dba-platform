@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}AWR报告对比{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">AWR报告对比分析</h1>
+  <a href="{{ url_for('awr.list_reports') }}" class="btn btn-secondary">返回列表</a>
+</div>
+
+<form method="POST" action="{{ url_for('awr.compare_reports') }}">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;">
+    <div class="analysis-section">
+      <div class="analysis-header">基准报告 (变更前)</div>
+      <div class="analysis-body">
+        <select name="report_a" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);">
+          <option value="">选择报告...</option>
+          {% for r in reports %}
+          <option value="{{ r.id }}">#{{ r.id }} {{ r.title }} ({{ r.db_name or '' }} {{ r.snap_begin_time.strftime('%m-%d %H:%M') if r.snap_begin_time else '' }})</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="analysis-section">
+      <div class="analysis-header">对比报告 (变更后)</div>
+      <div class="analysis-body">
+        <select name="report_b" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);">
+          <option value="">选择报告...</option>
+          {% for r in reports %}
+          <option value="{{ r.id }}">#{{ r.id }} {{ r.title }} ({{ r.db_name or '' }} {{ r.snap_begin_time.strftime('%m-%d %H:%M') if r.snap_begin_time else '' }})</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+  <button type="submit" class="btn btn-primary" style="width:100%;">开始对比分析</button>
+</form>
+{% endblock %}
