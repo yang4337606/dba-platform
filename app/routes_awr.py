@@ -9,7 +9,8 @@ from .awr_engine import (AWRParser, MetricScorer, CorrelationAnalyzer, BaselineC
                          LLMIntegration, LearningEngine, SQLAntiPatternDetector, classify_wait_event,
                          get_parameter_recommendations, get_version_specific_notes,
                          compute_composite_health_score,
-                         AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer)
+                         AdvisoryAnalyzer, TimeModelAnalyzer, WaitHistogramAnalyzer,
+                         WorkloadClassifier)
 
 awr_bp = Blueprint('awr', __name__, url_prefix='/awr')
 
@@ -616,9 +617,14 @@ def analyze_report(report_id):
     # Reconstruct parsed data from stored metrics
     parsed_data = _reconstruct_parsed_data(report)
 
-    # Step 1: Score metrics
+    # Step 0.5: Workload Classification (adjusts scoring thresholds)
+    workload_classifier = WorkloadClassifier()
+    workload_info = workload_classifier.classify(parsed_data)
+    threshold_overrides = workload_info.get('threshold_adjustments', {})
+
+    # Step 1: Score metrics (with workload-aware thresholds)
     scorer = MetricScorer()
-    problems = scorer.score_all(parsed_data, report)
+    problems = scorer.score_all(parsed_data, report, threshold_overrides=threshold_overrides)
 
     # Step 2: Correlate
     correlator = CorrelationAnalyzer()
@@ -737,6 +743,7 @@ def analyze_report(report_id):
         summary_parts.append(f"Advisory建议: {len(advisory_recommendations)}个")
     if time_model_findings:
         summary_parts.append(f"时间模型发现: {len(time_model_findings)}个")
+    summary_parts.append(f"负载类型: {workload_info['workload_type']}")
     if llm_result:
         summary_parts.append("(含LLM增强分析)")
     summary = ' | '.join(summary_parts)
@@ -751,6 +758,7 @@ def analyze_report(report_id):
         'advisory_recommendations': advisory_recommendations,
         'time_model_findings': time_model_findings,
         'histogram_findings': histogram_findings,
+        'workload_info': workload_info,
     }
     analysis = AWRAnalysisResult(
         report_id=report.id,

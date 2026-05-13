@@ -10,6 +10,7 @@
 {% set advisory_recs = recommendations.get('advisory_recommendations', []) if recommendations is mapping else [] %}
 {% set time_model = recommendations.get('time_model_findings', []) if recommendations is mapping else [] %}
 {% set histogram = recommendations.get('histogram_findings', []) if recommendations is mapping else [] %}
+{% set workload_info = recommendations.get('workload_info', {}) if recommendations is mapping else {} %}
 
 <div class="page-header">
   <div>
@@ -53,6 +54,36 @@
     </div>
   </div>
 </div>
+
+<!-- 1.5 Workload Classification -->
+{% if workload_info and workload_info.get('workload_type') %}
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;padding:12px 16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
+  <span style="font-size:14px;font-weight:700;padding:6px 14px;border-radius:6px;
+    {% if workload_info.workload_type == 'OLTP' %}background:#3b82f620;color:#3b82f6;border:1px solid #3b82f640;
+    {% elif workload_info.workload_type == 'OLAP' %}background:#8b5cf620;color:#8b5cf6;border:1px solid #8b5cf640;
+    {% elif workload_info.workload_type == 'HTAP' %}background:#f59e0b20;color:#f59e0b;border:1px solid #f59e0b40;
+    {% else %}background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border);{% endif %}">
+    {{ workload_info.workload_type }}
+  </span>
+  <div>
+    <div style="font-size:13px;font-weight:600;">负载类型识别
+      <span style="font-size:11px;color:var(--text-muted);font-weight:400;margin-left:6px;">置信度 {{ (workload_info.confidence * 100)|int }}%</span>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">
+      OLTP={{ workload_info.get('oltp_score', 0) }} / OLAP={{ workload_info.get('olap_score', 0) }}
+      {% if workload_info.get('threshold_adjustments') %} &middot; 已应用{{ workload_info.threshold_adjustments|length }}项阈值调整{% endif %}
+    </div>
+  </div>
+  {% if workload_info.get('signals') %}
+  <details style="margin-left:auto;font-size:11px;">
+    <summary style="cursor:pointer;color:var(--text-secondary);">识别依据</summary>
+    <ul style="margin:6px 0 0 0;padding-left:16px;color:var(--text-secondary);">
+      {% for s in workload_info.signals %}<li>{{ s }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
 
 <!-- 2. Summary -->
 {% if analysis.summary %}
