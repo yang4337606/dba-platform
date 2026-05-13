@@ -69,6 +69,23 @@ class AWRParser:
             ename = evt.get('event', evt.get('name', ''))
             if ename and not evt.get('wait_class'):
                 evt['wait_class'] = classify_wait_event(ename)
+
+        # Check if parsing yielded minimal data (non-standard report format)
+        db_info = result.get('db_info', {})
+        has_db_info = any(db_info.get(k) for k in ('db_name', 'instance_name', 'db_version'))
+        has_metrics = bool(
+            result.get('top_events')
+            or result.get('load_profile', {}).get('raw')
+            or result.get('instance_efficiency')
+            or result.get('time_model')
+        )
+        if not has_db_info and not has_metrics:
+            result['_parse_warning'] = (
+                'Non-standard AWR report format detected: no database info or metrics could be extracted. '
+                'The report may lack standard HTML structure (title, table summary attributes, or section headings).'
+            )
+            logger.warning("AWR parse yielded empty results – possible non-standard report format")
+
         return result
 
     def _find_table_after(self, soup: BeautifulSoup, pattern: str) -> Tag | None:
@@ -125,20 +142,46 @@ class AWRParser:
             return None
 
     def _parse_table(self, table: Tag | None) -> list[dict[str, str]]:
-        """Parse an HTML table into list of dicts."""
+        """Parse an HTML table into list of dicts.
+
+        Handles multi-row headers common in AWR reports where row 0 is a
+        group header (with colspan) and row 1 contains the actual column names.
+        """
         if table is None:
             return []
         try:
             rows = table.find_all('tr')
             if not rows:
                 return []
-            # First row provides headers
+
+            # Determine the true header row.
+            # AWR tables sometimes have a group-header row 0 with colspan that
+            # has fewer cells than the actual data. In that case row 1 (if it
+            # exists and has more cells) is the real header.
+            header_idx = 0
             header_row = rows[0]
-            headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
+            header_cells = header_row.find_all(['th', 'td'])
+            headers = [cell.get_text(strip=True) for cell in header_cells]
+
+            if len(rows) > 2:
+                row1_cells = rows[1].find_all(['th', 'td'])
+                row1_headers = [cell.get_text(strip=True) for cell in row1_cells]
+                # If row 1 has more columns than row 0, it's likely the real header
+                # (row 0 is a spanning group header).  Also accept when row 0
+                # contains a cell with colspan.
+                has_colspan = any(cell.get('colspan') for cell in header_cells)
+                if len(row1_headers) > len(headers) or (has_colspan and len(row1_headers) >= len(headers)):
+                    # Prefer row 1 only if its cells look like headers (contain <th>
+                    # or have meaningful text)
+                    row1_th_count = len(rows[1].find_all('th'))
+                    if row1_th_count > 0 or len(row1_headers) > len(headers):
+                        headers = row1_headers
+                        header_idx = 1
+
             if not headers:
                 return []
             result = []
-            for row in rows[1:]:
+            for row in rows[header_idx + 1:]:
                 cells = row.find_all(['th', 'td'])
                 values = [cell.get_text(strip=True) for cell in cells]
                 if not values:

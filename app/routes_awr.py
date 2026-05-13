@@ -177,6 +177,8 @@ def upload():
                                     detail=filename, ip_address=request.remote_addr))
             db.session.commit()
             flash(t('awr_upload_success'), 'success')
+            if parsed.get('_parse_warning'):
+                flash(t('awr_parse_warning_nonstandard'), 'warning')
             return redirect(url_for('awr.view_report', report_id=report.id))
 
         except Exception as e:
@@ -899,7 +901,7 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
                 t('summary_database', db_name=db_info.get('db_name', 'N/A'), instance_name=db_info.get('instance_name', 'N/A')),
                 t('summary_version', version=db_info.get('db_version', 'N/A')),
                 t('summary_snapshot', begin_id=snap_info.get('begin_id', 'N/A'), end_id=snap_info.get('end_id', 'N/A')),
-                t('summary_duration', seconds=snap_info.get('elapsed_seconds', 'N/A')),
+                t('summary_duration', seconds=round(float(snap_info.get('elapsed_seconds', 0) or 0), 1)),
                 t('summary_health_score', score=composite_score, level=health_level),
                 t('summary_problems_found', count=len(all_problems)),
             ]
