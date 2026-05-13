@@ -407,9 +407,13 @@ class MetricScorer:
                 if load_profile and isinstance(load_profile, dict):
                     computed = load_profile.get('computed', {})
                     db_time = self._safe_float(computed.get('db_time'))
-                    elapsed = self._safe_float(computed.get('elapsed_seconds') or computed.get('elapsed'))
+                    # elapsed_seconds is in snap_info, not in load_profile computed
+                    elapsed = self._safe_float(
+                        parsed_data.get('snap_info', {}).get('elapsed_seconds')
+                    )
                     if elapsed > 0 and cpu_count > 0:
-                        aas = db_time / elapsed
+                        # db_time is per-second, so AAS = db_time (per sec) directly
+                        aas = db_time
                         aas_per_cpu = aas / cpu_count
                         scored_metrics['aas_per_cpu'] = aas_per_cpu
         except Exception:

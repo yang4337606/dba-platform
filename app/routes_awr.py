@@ -454,6 +454,14 @@ def _store_metrics(report_id, parsed):
     _store_list_or_dict(report_id, 'service_stat', parsed.get('service_statistics', []))
     _store_list_or_dict(report_id, 'instance_recovery', parsed.get('instance_recovery_stats', []))
 
+    # --- New sections (Batch 5 - v3 parser chapters) ---
+    _store_list_or_dict(report_id, 'ash_activity', parsed.get('ash_activity', {}))
+    _store_list_or_dict(report_id, 'addm_finding', parsed.get('addm_findings', []))
+    _store_list_or_dict(report_id, 'sql_plan_change', parsed.get('sql_plan_changes', []))
+    _store_list_or_dict(report_id, 'host_cpu', parsed.get('host_instance_cpu', {}))
+    _store_list_or_dict(report_id, 'cache_size', parsed.get('cache_sizes', {}))
+    _store_list_or_dict(report_id, 'seg_row_lock_itl', parsed.get('segment_row_lock_itl', []))
+
 
 def _store_list_or_dict(report_id, metric_type, data):
     """Generic helper to store list-or-dict parsed sections as AWRMetric rows."""
@@ -513,16 +521,16 @@ def _reconstruct_parsed_data(report):
         'instance_efficiency': {},
         'os_stats': [],
         'rac_stats': [],
-        'redo_stats': [],
-        'parse_stats': [],
+        'redo_stats': {},
+        'parse_stats': {},
         'segment_stats': [],
-        'advisories': [],
+        'advisories': {},
         'enqueue_activity': [],
         'latch_detail': [],
         'wait_histogram': [],
-        'undo_stats': [],
+        'undo_stats': {},
         'wait_class_summary': [],
-        'temp_stats': [],
+        'temp_stats': {},
         'time_model': {},
         'io_profile': [],
         'file_io_stats': [],
@@ -568,21 +576,17 @@ def _reconstruct_parsed_data(report):
                 'name': m.metric_name, 'value': m.metric_value
             })
         elif m.metric_type == 'redo':
-            parsed_data['redo_stats'].append(extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value
-            })
+            parsed_data['redo_stats'][m.metric_name] = m.metric_value
         elif m.metric_type == 'parse_stat':
-            parsed_data['parse_stats'].append(extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value
-            })
+            parsed_data['parse_stats'][m.metric_name] = m.metric_value
         elif m.metric_type == 'segment':
             parsed_data['segment_stats'].append(extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
             })
         elif m.metric_type == 'advisory':
-            parsed_data['advisories'].append(extra if extra else {
+            parsed_data['advisories'][m.metric_name] = extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
-            })
+            }
         elif m.metric_type == 'enqueue':
             parsed_data['enqueue_activity'].append(extra if extra else {
                 'name': m.metric_name, 'value': m.metric_value
@@ -596,17 +600,13 @@ def _reconstruct_parsed_data(report):
                 'name': m.metric_name, 'value': m.metric_value
             })
         elif m.metric_type == 'undo':
-            parsed_data['undo_stats'].append(extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value
-            })
+            parsed_data['undo_stats'][m.metric_name] = m.metric_value
         elif m.metric_type == 'wait_class':
             parsed_data['wait_class_summary'].append(extra if extra else {
                 'wait_class': m.metric_name, 'pct_db_time': m.metric_value
             })
         elif m.metric_type == 'temp':
-            parsed_data['temp_stats'].append(extra if extra else {
-                'name': m.metric_name, 'value': m.metric_value
-            })
+            parsed_data['temp_stats'][m.metric_name] = m.metric_value
         elif m.metric_type == 'time_model':
             parsed_data['time_model'][m.metric_name] = extra if extra else {
                 'name': m.metric_name, 'time_seconds': m.metric_value
@@ -766,7 +766,15 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
             time_model_analyzer = TimeModelAnalyzer()
             lp = parsed_data.get('load_profile', {})
             lp_computed = lp.get('computed', {}) if isinstance(lp, dict) else {}
-            db_time_total = float(lp_computed.get('db_time', 0) or 0) * float(parsed_data.get('snap_info', {}).get('elapsed_seconds', 0) or 0)
+            db_time_per_sec = float(lp_computed.get('db_time', 0) or 0)
+            elapsed_secs = float(parsed_data.get('snap_info', {}).get('elapsed_seconds', 0) or 0)
+            db_time_total = db_time_per_sec * elapsed_secs
+            # Fallback: if load_profile didn't yield db_time, try time_model directly
+            if db_time_total <= 0:
+                tm = parsed_data.get('time_model', {})
+                db_time_entry = tm.get('db_time') or tm.get('DB_time') or tm.get('DB Time') or {}
+                if isinstance(db_time_entry, dict):
+                    db_time_total = float(db_time_entry.get('time_seconds', 0) or 0)
             time_model_findings = time_model_analyzer.analyze(parsed_data.get('time_model', {}), db_time_total)
 
             # Step 3.10: Wait Histogram Analysis
@@ -893,6 +901,7 @@ def _run_analysis(app, report_id, user_id, use_llm, ip_address):
         except Exception as e:
             logger.error(f"Analysis failed for report #{report_id}: {e}", exc_info=True)
             try:
+                db.session.rollback()
                 report = AWRReport.query.get(report_id)
                 if report:
                     report.status = 'error'

@@ -31,7 +31,8 @@ class BaselineComparer:
             baseline = db_session.query(AWRBaseline).filter(
                 AWRBaseline.db_name == report.db_name,
                 AWRBaseline.instance_name == report.instance_name,
-                AWRBaseline.metric_name == metric_name
+                AWRBaseline.metric_name == metric_name,
+                AWRBaseline.metric_type == 'auto'
             ).first()
             if not baseline or baseline.sample_count < 3:
                 continue

@@ -17,7 +17,7 @@ def _is_rate_limited(ip):
     """Check if an IP has exceeded login attempt limits."""
     now = time.time()
     # Clean old entries
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_attempts[ip] = [ts for ts in _login_attempts[ip] if now - ts < _LOGIN_WINDOW_SECONDS]
     return len(_login_attempts[ip]) >= _LOGIN_MAX_ATTEMPTS
 
 
