@@ -1,386 +1,558 @@
+import sqlite3
+import json
 from datetime import datetime
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
-
-db = SQLAlchemy()
-
-
-# ==============================================================================
-# User Model
-# ==============================================================================
-
-class User(UserMixin, db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='viewer')  # admin, analyst, viewer
-    is_active_user = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_login = db.Column(db.DateTime)
-
-    awr_reports = db.relationship('AWRReport', backref='uploader', lazy='dynamic',
-                                  foreign_keys='AWRReport.upload_user_id')
-    analyses = db.relationship('AWRAnalysisResult', backref='analyst', lazy='dynamic',
-                               foreign_keys='AWRAnalysisResult.analyst_id')
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-    @property
-    def is_admin(self):
-        return self.role == 'admin'
-
-    @property
-    def can_analyze(self):
-        return self.role in ('admin', 'analyst')
-
-    def __repr__(self):
-        return f'<User {self.username}>'
-
-
-# ==============================================================================
-# AWR Report - Upload record for AWR HTML files
-# ==============================================================================
-
-class AWRReport(db.Model):
-    __tablename__ = 'awr_reports'
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200), nullable=False)
-    filename = db.Column(db.String(255), nullable=False)
-    file_path = db.Column(db.String(500), nullable=False)
-    file_size = db.Column(db.Integer)
-
-    # Database instance info extracted from the AWR report
-    db_name = db.Column(db.String(100), index=True)
-    instance_name = db.Column(db.String(100), index=True)
-    db_version = db.Column(db.String(50))
-    host_name = db.Column(db.String(100))
-    platform = db.Column(db.String(100))
-
-    # Snapshot information
-    snap_begin_id = db.Column(db.Integer)
-    snap_end_id = db.Column(db.Integer)
-    snap_begin_time = db.Column(db.DateTime)
-    snap_end_time = db.Column(db.DateTime)
-    elapsed_seconds = db.Column(db.Float)
-
-    # Hardware info
-    cpu_count = db.Column(db.Integer, nullable=True)
-
-    # raw_html removed: large AWR HTML now served from file_path on disk
-    # raw_html = db.Column(db.Text)  # DEPRECATED - use file_path instead
-
-    # Ownership and status
-    upload_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    status = db.Column(db.String(20), default='uploaded', index=True)  # uploaded, parsed, analyzed, error
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships with cascade delete
-    metrics = db.relationship('AWRMetric', backref='report', lazy='dynamic',
-                              cascade='all, delete-orphan')
-    problems = db.relationship('AWRProblem', backref='report', lazy='dynamic',
-                               cascade='all, delete-orphan')
-    analyses = db.relationship('AWRAnalysisResult', backref='report', lazy='dynamic',
-                               cascade='all, delete-orphan')
-    baselines = db.relationship('AWRBaseline', backref='report', lazy='dynamic')
-
-    def __repr__(self):
-        return f'<AWRReport {self.title}>'
-
-
-# ==============================================================================
-# AWR Metric - Unified metrics table for all metric types
-# ==============================================================================
-
-class AWRMetric(db.Model):
-    __tablename__ = 'awr_metrics'
-    id = db.Column(db.Integer, primary_key=True)
-    report_id = db.Column(db.Integer, db.ForeignKey('awr_reports.id'), nullable=False, index=True)
-
-    # Metric classification
-    metric_type = db.Column(db.String(50), nullable=False, index=True)
-    # Types: load_profile, wait_event, sql_stat, io_stat, memory, efficiency,
-    #         redo, os_stat, rac, segment, advisory, parse_stat
-
-    metric_name = db.Column(db.String(200), nullable=False)
-    metric_value = db.Column(db.Float, nullable=True)
-    metric_unit = db.Column(db.String(50), nullable=True)  # e.g. '%DB Time', 'ms', 'per sec', 'per txn'
-
-    # For non-numeric data like SQL text, SQL_ID
-    metric_text = db.Column(db.Text, nullable=True)
-
-    # Additional structured data as JSON string
-    extra_json = db.Column(db.Text, nullable=True)
-
-    # For ordered items like Top SQL
-    rank_order = db.Column(db.Integer, nullable=True)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Composite index for common queries
-    __table_args__ = (
-        db.Index('ix_awr_metrics_report_type', 'report_id', 'metric_type'),
-    )
-
-    def __repr__(self):
-        return f'<AWRMetric {self.metric_type}:{self.metric_name}={self.metric_value}>'
-
-
-# ==============================================================================
-# AWR Problem - Identified problems per analysis
-# ==============================================================================
-
-class AWRProblem(db.Model):
-    __tablename__ = 'awr_problems'
-    id = db.Column(db.Integer, primary_key=True)
-    report_id = db.Column(db.Integer, db.ForeignKey('awr_reports.id'), nullable=False, index=True)
-    analysis_id = db.Column(db.Integer, db.ForeignKey('awr_analysis_results.id'), nullable=True)
-
-    # Problem classification
-    problem_type = db.Column(db.String(50), nullable=False)
-    # Types: wait_event, sql, io, memory, redo, rac, parse, general
-
-    title = db.Column(db.String(300), nullable=False)
-    severity = db.Column(db.String(20), nullable=False, default='medium')  # low, medium, high, critical
-    health_level = db.Column(db.String(20), nullable=False, default='warning')  # healthy, warning, serious
-
-    # Related metric info
-    metric_name = db.Column(db.String(200))
-    metric_value = db.Column(db.Float, nullable=True)
-    metric_unit = db.Column(db.String(50), nullable=True)
-
-    # Thresholds used for evaluation
-    threshold_warning = db.Column(db.Float, nullable=True)
-    threshold_serious = db.Column(db.Float, nullable=True)
-
-    # Human-readable evidence string
-    evidence = db.Column(db.Text)
-
-    # JSON array of related metric references
-    related_metrics_json = db.Column(db.Text, nullable=True)
-
-    # JSON describing the root cause chain
-    correlation_chain = db.Column(db.Text, nullable=True)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Relationship to analysis
-    analysis = db.relationship('AWRAnalysisResult', backref=db.backref('problems', lazy='dynamic'))
-
-    def __repr__(self):
-        return f'<AWRProblem [{self.severity}] {self.title}>'
-
-
-# ==============================================================================
-# AWR Analysis Result - Analysis output (rule-based, LLM, or combined)
-# ==============================================================================
-
-class AWRAnalysisResult(db.Model):
-    __tablename__ = 'awr_analysis_results'
-    id = db.Column(db.Integer, primary_key=True)
-    report_id = db.Column(db.Integer, db.ForeignKey('awr_reports.id'), nullable=False, index=True)
-
-    # Analysis metadata
-    analysis_type = db.Column(db.String(50), nullable=False, default='rule')  # rule, llm, combined
-    health_level = db.Column(db.String(20), nullable=False, default='healthy')  # healthy, warning, serious
-
-    # Analysis output
-    summary = db.Column(db.Text)
-    problems_json = db.Column(db.Text)  # Structured problems JSON
-    recommendations_json = db.Column(db.Text)  # Structured recommendations
-    correlation_findings_json = db.Column(db.Text)  # Cross-metric findings
-
-    # LLM-specific fields
-    llm_provider = db.Column(db.String(50), nullable=True)
-    llm_raw_response = db.Column(db.Text, nullable=True)
-    llm_structured_json = db.Column(db.Text, nullable=True)  # Parsed LLM JSON output
-    learned_patterns_json = db.Column(db.Text, nullable=True)  # Patterns LLM suggested
-
-    # Who ran this analysis
-    analyst_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<AWRAnalysisResult report={self.report_id} type={self.analysis_type}>'
-
-
-# ==============================================================================
-# Knowledge Rule - Self-learning rules for pattern matching
-# ==============================================================================
-
-class KnowledgeRule(db.Model):
-    __tablename__ = 'knowledge_rules'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-
-    # Rule classification
-    category = db.Column(db.String(50), nullable=False, index=True)
-    # Categories: wait_event, sql, io, memory, redo, rac, parse, general
-
-    # JSON array of structured conditions
-    # Example: [{"metric": "pct_db_time", "op": ">", "value": 30, "event": "db file sequential read"}]
-    conditions_json = db.Column(db.Text, nullable=False)
-
-    root_cause = db.Column(db.Text)
-    solution = db.Column(db.Text)
-    severity = db.Column(db.String(20), nullable=False, default='medium')  # low, medium, high, critical
-
-    # Learning metrics
-    confidence = db.Column(db.Float, default=0.5)
-    status = db.Column(db.String(20), nullable=False, default='candidate', index=True)
-    # Status: candidate, observed, active, stale, rejected
-    source = db.Column(db.String(20), nullable=False, default='builtin')  # builtin, learned, llm, manual
-
-    # Hit tracking
-    hit_count = db.Column(db.Integer, default=0)
-    miss_streak = db.Column(db.Integer, default=0)  # Consecutive analyses without a hit
-    last_hit_at = db.Column(db.DateTime, nullable=True)
-
-    # Active flag: computed from status, active if status in ('observed', 'active')
-    is_active = db.Column(db.Boolean, default=True)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    hit_logs = db.relationship('KnowledgeHitLog', backref='rule', lazy='dynamic',
-                               cascade='all, delete-orphan')
-
-    def __repr__(self):
-        return f'<KnowledgeRule [{self.category}] {self.name}>'
-
-
-# ==============================================================================
-# Knowledge Hit Log - Records of when rules matched reports
-# ==============================================================================
-
-class KnowledgeHitLog(db.Model):
-    __tablename__ = 'knowledge_hit_logs'
-    id = db.Column(db.Integer, primary_key=True)
-    rule_id = db.Column(db.Integer, db.ForeignKey('knowledge_rules.id'), nullable=False, index=True)
-    report_id = db.Column(db.Integer, db.ForeignKey('awr_reports.id'), nullable=False, index=True)
-
-    # Which metrics triggered this rule (JSON)
-    hit_metrics_json = db.Column(db.Text, nullable=True)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Relationship to report
-    report = db.relationship('AWRReport', backref=db.backref('knowledge_hits', lazy='dynamic'))
-
-    def __repr__(self):
-        return f'<KnowledgeHitLog rule={self.rule_id} report={self.report_id}>'
-
-
-# ==============================================================================
-# AWR Baseline - Historical baseline metrics for comparison
-# ==============================================================================
-
-class AWRBaseline(db.Model):
-    __tablename__ = 'awr_baselines'
-    id = db.Column(db.Integer, primary_key=True)
-
-    # Identifies which database/instance this baseline is for
-    db_name = db.Column(db.String(100), nullable=False)
-    instance_name = db.Column(db.String(100), nullable=False)
-
-    # Metric identification
-    metric_name = db.Column(db.String(200), nullable=False)
-    metric_type = db.Column(db.String(50), nullable=False)
-
-    # Statistical values
-    avg_value = db.Column(db.Float, nullable=False)
-    min_value = db.Column(db.Float, nullable=False)
-    max_value = db.Column(db.Float, nullable=False)
-    p95_value = db.Column(db.Float, nullable=True)
-    sample_count = db.Column(db.Integer, default=0)
-
-    # Optional FK to the report that last updated this baseline
-    report_id = db.Column(db.Integer, db.ForeignKey('awr_reports.id'), nullable=True)
-
-    last_updated = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Composite indexes for frequent lookups
-    __table_args__ = (
-        db.Index('ix_awr_baselines_db_instance', 'db_name', 'instance_name'),
-        db.Index('ix_awr_baselines_lookup', 'db_name', 'instance_name', 'metric_name', 'metric_type'),
-    )
-
-    def __repr__(self):
-        return f'<AWRBaseline {self.db_name}/{self.instance_name} {self.metric_name}>'
-
-
-# ==============================================================================
-# System Setting - Key/value store for configuration and thresholds
-# ==============================================================================
-
-class SystemSetting(db.Model):
-    __tablename__ = 'system_settings'
-    id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(100), unique=True, nullable=False)
-    value = db.Column(db.Text)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    @staticmethod
-    def get(key, default=None):
-        setting = SystemSetting.query.filter_by(key=key).first()
-        return setting.value if setting else default
-
-    @staticmethod
-    def set(key, value):
-        setting = SystemSetting.query.filter_by(key=key).first()
-        if setting:
-            setting.value = value
+from pathlib import Path
+
+
+class Database:
+    def __init__(self, db_path="data/history.db"):
+        self.db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _get_conn(self):
+        """Get a thread-safe connection."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        conn = self._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS analysis_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                filename TEXT NOT NULL,
+                analyzer_type TEXT NOT NULL,
+
+                db_time REAL,
+                elapsed_time REAL,
+                aas REAL,
+                db_cpu_percent REAL,
+                load_type TEXT,
+
+                main_problem TEXT,
+                diagnosis_summary TEXT,
+
+                raw_result TEXT,
+                llm_analysis TEXT,
+                llm_result_json TEXT,
+                markdown_content TEXT
+            )
+        """)
+
+        # Migration: add llm_result_json column if missing
+        cursor = conn.execute("PRAGMA table_info(analysis_history)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "llm_result_json" not in columns:
+            conn.execute("ALTER TABLE analysis_history ADD COLUMN llm_result_json TEXT")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS database_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                db_identifier TEXT UNIQUE NOT NULL,
+                db_name TEXT,
+                db_version TEXT,
+                business_type TEXT,
+                environment TEXT,
+
+                common_bottlenecks TEXT,
+                optimized_items TEXT,
+                notes TEXT,
+
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+
+    def save_analysis(self, filename, analyzer_type, result, llm_result, markdown):
+        """保存分析结果"""
+        conn = sqlite3.connect(self.db_path)
+
+        # 提取关键指标
+        metrics = result.get("metrics", {})
+        diagnosis = result.get("diagnosis", {})
+
+        # 提取纯文本分析（向后兼容）
+        llm_analysis_text = ""
+        if llm_result:
+            llm_analysis_text = llm_result.get("expert_analysis", "") or llm_result.get("analysis", "")
+
+        # 完整 LLM 结果 JSON
+        llm_json = json.dumps(llm_result, ensure_ascii=False) if llm_result else None
+
+        conn.execute("""
+            INSERT INTO analysis_history (
+                filename, analyzer_type,
+                db_time, elapsed_time, aas, db_cpu_percent, load_type,
+                main_problem, diagnosis_summary,
+                raw_result, llm_analysis, llm_result_json, markdown_content
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            filename,
+            analyzer_type,
+            metrics.get("db_time"),
+            metrics.get("elapsed_time"),
+            metrics.get("aas"),
+            metrics.get("db_cpu_percent"),
+            metrics.get("load_type"),
+            diagnosis.get("main_problem"),
+            diagnosis.get("summary"),
+            json.dumps(result, ensure_ascii=False),
+            llm_analysis_text,
+            llm_json,
+            markdown
+        ))
+
+        conn.commit()
+        record_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.close()
+
+        return record_id
+
+    def get_all_history(self, limit=50):
+        """获取所有历史记录"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute("""
+            SELECT id, created_at, filename, analyzer_type,
+                   db_time, elapsed_time, aas, db_cpu_percent, load_type,
+                   main_problem, diagnosis_summary
+            FROM analysis_history
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return records
+
+    def get_by_id(self, record_id):
+        """获取单条记录详情"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute("""
+            SELECT * FROM analysis_history WHERE id = ?
+        """, (record_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            record = dict(row)
+            if record.get("raw_result"):
+                record["raw_result"] = json.loads(record["raw_result"])
+            # Parse structured LLM result (new format)
+            if record.get("llm_result_json"):
+                record["llm_result"] = json.loads(record["llm_result_json"])
+            elif record.get("llm_analysis"):
+                # Backward compat: old records with only text
+                record["llm_result"] = {"expert_analysis": record["llm_analysis"]}
+            return record
+        return None
+
+    def delete_by_id(self, record_id):
+        """删除记录"""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("DELETE FROM analysis_history WHERE id = ?", (record_id,))
+        conn.commit()
+        conn.close()
+
+    def get_similar_cases(self, main_problem, limit=5):
+        """检索相似案例（简单关键词匹配）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute("""
+            SELECT id, created_at, filename, main_problem, diagnosis_summary
+            FROM analysis_history
+            WHERE main_problem LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (f"%{main_problem}%", limit))
+
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return records
+
+    def compare_records(self, record1, record2):
+        """对比两条记录，计算差异和趋势"""
+        comparison = {
+            "metrics_diff": {},
+            "trend": {},
+            "top_events_diff": [],
+            "top_sql_diff": [],
+            "summary": ""
+        }
+
+        # 对比关键指标
+        metrics = ["db_time", "elapsed_time", "aas", "db_cpu_percent"]
+        for metric in metrics:
+            val1 = record1.get(metric)
+            val2 = record2.get(metric)
+
+            if val1 is not None and val2 is not None:
+                diff = val2 - val1
+                pct_change = (diff / val1 * 100) if val1 != 0 else 0
+
+                comparison["metrics_diff"][metric] = {
+                    "old": val1,
+                    "new": val2,
+                    "diff": diff,
+                    "pct_change": pct_change,
+                    "trend": "up" if diff > 0 else "down" if diff < 0 else "stable"
+                }
+
+        # 生成总体趋势
+        if comparison["metrics_diff"].get("db_time"):
+            db_time_trend = comparison["metrics_diff"]["db_time"]["trend"]
+            db_time_pct = comparison["metrics_diff"]["db_time"]["pct_change"]
+
+            if db_time_trend == "up":
+                comparison["trend"]["overall"] = "worse"
+                comparison["trend"]["message"] = f"性能下降 {abs(db_time_pct):.1f}%"
+            elif db_time_trend == "down":
+                comparison["trend"]["overall"] = "better"
+                comparison["trend"]["message"] = f"性能提升 {abs(db_time_pct):.1f}%"
+            else:
+                comparison["trend"]["overall"] = "stable"
+                comparison["trend"]["message"] = "性能基本稳定"
+
+        # 对比 Top Events（从 raw_result 中提取）
+        try:
+            raw1 = record1.get("raw_result")
+            raw2 = record2.get("raw_result")
+
+            if raw1 and raw2:
+                result1 = json.loads(raw1) if isinstance(raw1, str) else raw1
+                result2 = json.loads(raw2) if isinstance(raw2, str) else raw2
+
+                events1 = result1.get("evidence", {}).get("Top Events", [])
+                events2 = result2.get("evidence", {}).get("Top Events", [])
+
+                # 简单对比前5个事件
+                comparison["top_events_diff"] = self._compare_events(events1[:5], events2[:5])
+
+                # 对比 Top SQL
+                sql1 = result1.get("evidence", {}).get("Top SQL", [])
+                sql2 = result2.get("evidence", {}).get("Top SQL", [])
+                comparison["top_sql_diff"] = self._compare_sql(sql1[:5], sql2[:5])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to compare events/sql: {e}")
+
+        return comparison
+
+    def _compare_events(self, events1, events2):
+        """对比两组等待事件"""
+        event_map1 = {e["name"]: e for e in events1}
+        event_map2 = {e["name"]: e for e in events2}
+
+        all_events = set(event_map1.keys()) | set(event_map2.keys())
+        diff = []
+
+        for event_name in all_events:
+            e1 = event_map1.get(event_name)
+            e2 = event_map2.get(event_name)
+
+            if e1 and e2:
+                # 都存在，对比变化
+                diff.append({
+                    "name": event_name,
+                    "status": "changed",
+                    "old_value": e1.get("value", ""),
+                    "new_value": e2.get("value", "")
+                })
+            elif e1:
+                # 只在旧记录中存在
+                diff.append({
+                    "name": event_name,
+                    "status": "removed",
+                    "old_value": e1.get("value", ""),
+                    "new_value": "-"
+                })
+            else:
+                # 只在新记录中存在
+                diff.append({
+                    "name": event_name,
+                    "status": "new",
+                    "old_value": "-",
+                    "new_value": e2.get("value", "")
+                })
+
+        return diff
+
+    def _compare_sql(self, sql1, sql2):
+        """对比两组 Top SQL"""
+        sql_map1 = {s["name"]: s for s in sql1}
+        sql_map2 = {s["name"]: s for s in sql2}
+
+        all_sql = set(sql_map1.keys()) | set(sql_map2.keys())
+        diff = []
+
+        for sql_id in all_sql:
+            s1 = sql_map1.get(sql_id)
+            s2 = sql_map2.get(sql_id)
+
+            if s1 and s2:
+                diff.append({
+                    "sql_id": sql_id,
+                    "status": "changed",
+                    "old_value": s1.get("value", ""),
+                    "new_value": s2.get("value", "")
+                })
+            elif s1:
+                diff.append({
+                    "sql_id": sql_id,
+                    "status": "removed",
+                    "old_value": s1.get("value", ""),
+                    "new_value": "-"
+                })
+            else:
+                diff.append({
+                    "sql_id": sql_id,
+                    "status": "new",
+                    "old_value": "-",
+                    "new_value": s2.get("value", "")
+                })
+
+        return diff
+
+
+    def get_profile(self, db_identifier):
+        """获取数据库画像"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute("""
+            SELECT * FROM database_profiles WHERE db_identifier = ?
+        """, (db_identifier,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            profile = dict(row)
+            if profile.get("common_bottlenecks"):
+                profile["common_bottlenecks"] = json.loads(profile["common_bottlenecks"])
+            if profile.get("optimized_items"):
+                profile["optimized_items"] = json.loads(profile["optimized_items"])
+            return profile
+        return None
+
+    def save_profile(self, db_identifier, db_name=None, db_version=None,
+                     business_type=None, environment=None, common_bottlenecks=None,
+                     optimized_items=None, notes=None):
+        """保存或更新数据库画像"""
+        conn = sqlite3.connect(self.db_path)
+
+        # 检查是否已存在
+        existing = conn.execute(
+            "SELECT id FROM database_profiles WHERE db_identifier = ?",
+            (db_identifier,)
+        ).fetchone()
+
+        if existing:
+            # 更新
+            conn.execute("""
+                UPDATE database_profiles
+                SET db_name = COALESCE(?, db_name),
+                    db_version = COALESCE(?, db_version),
+                    business_type = COALESCE(?, business_type),
+                    environment = COALESCE(?, environment),
+                    common_bottlenecks = COALESCE(?, common_bottlenecks),
+                    optimized_items = COALESCE(?, optimized_items),
+                    notes = COALESCE(?, notes),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE db_identifier = ?
+            """, (
+                db_name, db_version, business_type, environment,
+                json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
+                json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
+                notes, db_identifier
+            ))
         else:
-            setting = SystemSetting(key=key, value=value)
-            db.session.add(setting)
-        db.session.commit()
+            # 插入
+            conn.execute("""
+                INSERT INTO database_profiles (
+                    db_identifier, db_name, db_version, business_type, environment,
+                    common_bottlenecks, optimized_items, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                db_identifier, db_name, db_version, business_type, environment,
+                json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
+                json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
+                notes
+            ))
+
+        conn.commit()
+        conn.close()
+
+    def get_all_profiles(self):
+        """获取所有数据库画像"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        cursor = conn.execute("""
+            SELECT id, db_identifier, db_name, db_version, business_type,
+                   environment, updated_at
+            FROM database_profiles
+            ORDER BY updated_at DESC
+        """)
+
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return records
+
+    def update_profile_from_analysis(self, db_identifier, main_problem):
+        """根据分析结果自动更新数据库画像"""
+        profile = self.get_profile(db_identifier)
+
+        if not profile:
+            # 创建新画像
+            self.save_profile(
+                db_identifier=db_identifier,
+                common_bottlenecks=[main_problem]
+            )
+        else:
+            # 更新常见瓶颈
+            bottlenecks = profile.get("common_bottlenecks", [])
+            if main_problem and main_problem not in bottlenecks:
+                bottlenecks.append(main_problem)
+                # 只保留最近10个
+                bottlenecks = bottlenecks[-10:]
+                self.save_profile(
+                    db_identifier=db_identifier,
+                    common_bottlenecks=bottlenecks
+                )
+
+    def get_trend_data(self, days=30, analyzer_type=None):
+        """获取性能趋势数据"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        query = """
+            SELECT
+                id,
+                created_at,
+                filename,
+                db_time,
+                aas,
+                db_cpu_percent,
+                load_type,
+                main_problem
+            FROM analysis_history
+            WHERE datetime(created_at) >= datetime('now', '-' || ? || ' days')
+        """
+        params = [days]
+
+        if analyzer_type:
+            query += " AND analyzer_type = ?"
+            params.append(analyzer_type)
+
+        query += " ORDER BY created_at ASC"
+
+        cursor = conn.execute(query, params)
+        records = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return records
+
+    def get_statistics(self):
+        """获取统计信息"""
+        conn = sqlite3.connect(self.db_path)
+
+        stats = {}
+
+        # 总记录数
+        stats["total_records"] = conn.execute(
+            "SELECT COUNT(*) FROM analysis_history"
+        ).fetchone()[0]
+
+        # 最近7天记录数
+        stats["recent_records"] = conn.execute(
+            "SELECT COUNT(*) FROM analysis_history WHERE datetime(created_at) >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # 平均 DB Time
+        result = conn.execute(
+            "SELECT AVG(db_time) FROM analysis_history WHERE db_time IS NOT NULL"
+        ).fetchone()
+        stats["avg_db_time"] = result[0] if result[0] else 0
+
+        # 平均 AAS
+        result = conn.execute(
+            "SELECT AVG(aas) FROM analysis_history WHERE aas IS NOT NULL"
+        ).fetchone()
+        stats["avg_aas"] = result[0] if result[0] else 0
+
+        # 最常见问题 Top 5
+        cursor = conn.execute("""
+            SELECT main_problem, COUNT(*) as count
+            FROM analysis_history
+            WHERE main_problem IS NOT NULL AND main_problem != ''
+            GROUP BY main_problem
+            ORDER BY count DESC
+            LIMIT 5
+        """)
+        stats["top_problems"] = [{"problem": row[0], "count": row[1]} for row in cursor.fetchall()]
+
+        # 数据库画像数量
+        stats["total_profiles"] = conn.execute(
+            "SELECT COUNT(*) FROM database_profiles"
+        ).fetchone()[0]
+
+        conn.close()
+        return stats
+
+    def detect_anomalies(self, records, metric="db_time", threshold=1.5):
+        """检测性能突变点"""
+        if len(records) < 3:
+            return []
+
+        anomalies = []
+        values = [r.get(metric) for r in records if r.get(metric) is not None]
+
+        if len(values) < 3:
+            return []
+
+        # 计算移动平均和标准差
+        for i in range(2, len(records)):
+            current = records[i].get(metric)
+            if current is None:
+                continue
+
+            # 前面的值
+            prev_values = [records[j].get(metric) for j in range(max(0, i-5), i) if records[j].get(metric) is not None]
+            if len(prev_values) < 2:
+                continue
+
+            avg = sum(prev_values) / len(prev_values)
+            std = (sum((x - avg) ** 2 for x in prev_values) / len(prev_values)) ** 0.5
+
+            # 检测异常
+            if std > 0 and abs(current - avg) > threshold * std:
+                anomalies.append({
+                    "index": i,
+                    "record_id": records[i]["id"],
+                    "timestamp": records[i]["created_at"],
+                    "metric": metric,
+                    "value": current,
+                    "expected": avg,
+                    "deviation": abs(current - avg) / std,
+                    "type": "spike" if current > avg else "drop"
+                })
+
+        return anomalies
 
 
-# ==============================================================================
-# GitHub Project - Tracked GitHub repositories
-# ==============================================================================
-
-class GitHubProject(db.Model):
-    __tablename__ = 'github_projects'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
-    language = db.Column(db.String(50))
-    url = db.Column(db.String(500))
-    stars = db.Column(db.Integer, default=0)
-    is_private = db.Column(db.Boolean, default=False)
-    category = db.Column(db.String(50))  # database, middleware, system, ai, other
-    display_order = db.Column(db.Integer, default=0)
-    is_featured = db.Column(db.Boolean, default=False)
-    synced_at = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<GitHubProject {self.name}>'
-
-
-# ==============================================================================
-# Audit Log - Track user actions
-# ==============================================================================
-
-class AuditLog(db.Model):
-    __tablename__ = 'audit_logs'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    action = db.Column(db.String(100), nullable=False)
-    detail = db.Column(db.Text)
-    ip_address = db.Column(db.String(45))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    user = db.relationship('User', backref='audit_logs')
+# 全局数据库实例
+db = Database()

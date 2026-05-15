@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}LLM 配置 - 系统设置{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <section class="workspace-section" style="max-width: 720px;">
+        <div class="section-heading">
+            <p class="eyebrow">LLM Config</p>
+            <h2>LLM 配置</h2>
+            <p>配置 OpenAI 兼容 API，启用 AI 增强分析。支持 DeepSeek、通义千问、GLM 等。</p>
+        </div>
+
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="message">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>
+        {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('main.save_settings') }}" method="post" class="upload-card">
+            <div class="form-group">
+                <label for="base_url">API Base URL</label>
+                <input id="base_url" name="base_url" type="text" value="{{ config.base_url or 'https://api.openai.com/v1' }}" placeholder="https://api.openai.com/v1">
+                <p class="field-help">OpenAI 兼容接口地址。DeepSeek: https://api.deepseek.com/v1</p>
+            </div>
+            <div class="form-group">
+                <label for="api_key">API Key</label>
+                <input id="api_key" name="api_key" type="password" value="" placeholder="{% if masked_key %}当前已配置: {{ masked_key }}{% else %}sk-...{% endif %}">
+                <p class="field-help">留空表示不修改已保存的 Key。</p>
+            </div>
+            <div class="form-group">
+                <label for="model">模型名称</label>
+                <input id="model" name="model" type="text" value="{{ config.model or 'gpt-4o' }}" placeholder="gpt-4o">
+                <p class="field-help">如 gpt-4o、deepseek-chat、qwen-max 等。</p>
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <button class="btn btn-primary" type="submit">保存配置</button>
+                <button class="btn btn-secondary" type="button" id="test-btn" onclick="testConnection()">测试连接</button>
+            </div>
+            <div id="test-result" style="margin-top: 12px; font-size: 14px;"></div>
+        </form>
+    </section>
+</main>
+
+<script>
+async function testConnection() {
+    const btn = document.getElementById('test-btn');
+    const result = document.getElementById('test-result');
+    btn.disabled = true; btn.textContent = '测试中...';
+    result.innerHTML = '<span style="color: var(--muted);">正在连接...</span>';
+    try {
+        const resp = await fetch('/api/llm-test', { method: 'POST' });
+        const ct = resp.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) { result.innerHTML = '<span style="color: var(--danger);">非 JSON 响应，状态码: ' + resp.status + '</span>'; return; }
+        const data = await resp.json();
+        result.innerHTML = data.success
+            ? '<span style="color: var(--success);">连接成功！模型: ' + data.model + '</span>'
+            : '<span style="color: var(--danger);">' + (data.error || '未知错误') + '</span>';
+    } catch (e) {
+        result.innerHTML = '<span style="color: var(--danger);">请求失败: ' + e.message + '</span>';
+    } finally {
+        btn.disabled = false; btn.textContent = '测试连接';
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,469 @@
+{% extends "base.html" %}
+
+{% block title %}性能趋势分析{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <div class="result-container">
+
+    {# ===== Top Bar ===== #}
+    <div class="top-bar">
+        <a href="{{ url_for('main.history') }}">&larr; 返回历史记录</a>
+        <div class="top-bar-right">
+            <form method="get" style="display: inline-flex; gap: 0.5rem; align-items: center;">
+                <select name="days" class="time-select">
+                    <option value="7" {% if days == 7 %}selected{% endif %}>最近7天</option>
+                    <option value="30" {% if days == 30 %}selected{% endif %}>最近30天</option>
+                    <option value="90" {% if days == 90 %}selected{% endif %}>最近90天</option>
+                </select>
+                <button type="submit" class="btn-small">刷新</button>
+            </form>
+        </div>
+    </div>
+
+    {# ===== Header ===== #}
+    <h1>性能趋势分析</h1>
+    <p class="page-subtitle">基于最近 {{ days }} 天的 {{ trend_data|length }} 条分析记录</p>
+
+    {# ===== Statistics Cards ===== #}
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">📊</div>
+            <div class="stat-content">
+                <div class="stat-label">总记录数</div>
+                <div class="stat-value">{{ stats.total_records }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📈</div>
+            <div class="stat-content">
+                <div class="stat-label">最近7天</div>
+                <div class="stat-value">{{ stats.recent_records }}</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">⏱️</div>
+            <div class="stat-content">
+                <div class="stat-label">平均 DB Time</div>
+                <div class="stat-value">{{ "%.1f"|format(stats.avg_db_time) }} min</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">⚡</div>
+            <div class="stat-content">
+                <div class="stat-label">平均 AAS</div>
+                <div class="stat-value">{{ "%.2f"|format(stats.avg_aas) }}</div>
+            </div>
+        </div>
+    </div>
+
+    {% if trend_data|length < 2 %}
+    <div class="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity: 0.3; margin-bottom: 1rem;">
+            <line x1="12" y1="20" x2="12" y2="10"></line>
+            <line x1="18" y1="20" x2="18" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="16"></line>
+        </svg>
+        <h3>数据不足</h3>
+        <p>至少需要2条记录才能显示趋势图表</p>
+        <a href="{{ url_for('main.index') }}" class="btn btn-primary" style="margin-top: 1rem;">开始分析</a>
+    </div>
+    {% else %}
+
+    {# ===== Charts ===== #}
+    <section>
+        <h2>DB Time 趋势</h2>
+        <div class="chart-container">
+            <canvas id="dbTimeChart"></canvas>
+        </div>
+    </section>
+
+    <section>
+        <h2>AAS 趋势</h2>
+        <div class="chart-container">
+            <canvas id="aasChart"></canvas>
+        </div>
+    </section>
+
+    <section>
+        <h2>DB CPU 趋势</h2>
+        <div class="chart-container">
+            <canvas id="cpuChart"></canvas>
+        </div>
+    </section>
+
+    {# ===== Anomalies ===== #}
+    {% set total_anomalies = (anomalies.db_time|length) + (anomalies.aas|length) + (anomalies.db_cpu_percent|length) %}
+    {% if total_anomalies > 0 %}
+    <section>
+        <h2>性能突变点 <span class="anomaly-badge">{{ total_anomalies }}</span></h2>
+        <div class="anomalies-list">
+            {% for anomaly in anomalies.db_time %}
+            <div class="anomaly-item anomaly-{{ anomaly.type }}">
+                <div class="anomaly-header">
+                    <span class="anomaly-icon">{% if anomaly.type == 'spike' %}⚠️{% else %}📉{% endif %}</span>
+                    <strong>DB Time {{ '激增' if anomaly.type == 'spike' else '骤降' }}</strong>
+                    <span class="anomaly-time">{{ anomaly.timestamp }}</span>
+                </div>
+                <div class="anomaly-body">
+                    <p>实际值: <strong>{{ "%.2f"|format(anomaly.value) }} min</strong> |
+                       期望值: {{ "%.2f"|format(anomaly.expected) }} min |
+                       偏差: {{ "%.1f"|format(anomaly.deviation) }}σ</p>
+                    <a href="{{ url_for('main.view_history', record_id=anomaly.record_id) }}" class="anomaly-link">查看详情 →</a>
+                </div>
+            </div>
+            {% endfor %}
+
+            {% for anomaly in anomalies.aas %}
+            <div class="anomaly-item anomaly-{{ anomaly.type }}">
+                <div class="anomaly-header">
+                    <span class="anomaly-icon">{% if anomaly.type == 'spike' %}⚠️{% else %}📉{% endif %}</span>
+                    <strong>AAS {{ '激增' if anomaly.type == 'spike' else '骤降' }}</strong>
+                    <span class="anomaly-time">{{ anomaly.timestamp }}</span>
+                </div>
+                <div class="anomaly-body">
+                    <p>实际值: <strong>{{ "%.2f"|format(anomaly.value) }}</strong> |
+                       期望值: {{ "%.2f"|format(anomaly.expected) }} |
+                       偏差: {{ "%.1f"|format(anomaly.deviation) }}σ</p>
+                    <a href="{{ url_for('main.view_history', record_id=anomaly.record_id) }}" class="anomaly-link">查看详情 →</a>
+                </div>
+            </div>
+            {% endfor %}
+
+            {% for anomaly in anomalies.db_cpu_percent %}
+            <div class="anomaly-item anomaly-{{ anomaly.type }}">
+                <div class="anomaly-header">
+                    <span class="anomaly-icon">{% if anomaly.type == 'spike' %}⚠️{% else %}📉{% endif %}</span>
+                    <strong>DB CPU {{ '激增' if anomaly.type == 'spike' else '骤降' }}</strong>
+                    <span class="anomaly-time">{{ anomaly.timestamp }}</span>
+                </div>
+                <div class="anomaly-body">
+                    <p>实际值: <strong>{{ "%.1f"|format(anomaly.value) }}%</strong> |
+                       期望值: {{ "%.1f"|format(anomaly.expected) }}% |
+                       偏差: {{ "%.1f"|format(anomaly.deviation) }}σ</p>
+                    <a href="{{ url_for('main.view_history', record_id=anomaly.record_id) }}" class="anomaly-link">查看详情 →</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Top Problems ===== #}
+    {% if stats.top_problems %}
+    <section>
+        <h2>最常见问题 Top 5</h2>
+        <div class="problems-list">
+            {% for item in stats.top_problems %}
+            <div class="problem-item">
+                <div class="problem-bar" style="width: {{ (item.count / stats.top_problems[0].count * 100) }}%"></div>
+                <div class="problem-content">
+                    <span class="problem-name">{{ item.problem }}</span>
+                    <span class="problem-count">{{ item.count }} 次</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% endif %}
+
+    </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+{% if trend_data|length >= 2 %}
+const trendData = {{ trend_data | tojson }};
+
+// 准备数据
+const labels = trendData.map(d => d.created_at.split(' ')[0]);
+const dbTimeData = trendData.map(d => d.db_time);
+const aasData = trendData.map(d => d.aas);
+const cpuData = trendData.map(d => d.db_cpu_percent);
+
+// 通用配置
+const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+        legend: {
+            display: false
+        }
+    },
+    scales: {
+        x: {
+            grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+            },
+            ticks: {
+                color: '#95a4ba'
+            }
+        },
+        y: {
+            grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+            },
+            ticks: {
+                color: '#95a4ba'
+            }
+        }
+    }
+};
+
+// DB Time Chart
+new Chart(document.getElementById('dbTimeChart'), {
+    type: 'line',
+    data: {
+        labels: labels,
+        datasets: [{
+            label: 'DB Time (min)',
+            data: dbTimeData,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            fill: true,
+            tension: 0.4
+        }]
+    },
+    options: commonOptions
+});
+
+// AAS Chart
+new Chart(document.getElementById('aasChart'), {
+    type: 'line',
+    data: {
+        labels: labels,
+        datasets: [{
+            label: 'AAS',
+            data: aasData,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.4
+        }]
+    },
+    options: commonOptions
+});
+
+// CPU Chart
+new Chart(document.getElementById('cpuChart'), {
+    type: 'line',
+    data: {
+        labels: labels,
+        datasets: [{
+            label: 'DB CPU (%)',
+            data: cpuData,
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            fill: true,
+            tension: 0.4
+        }]
+    },
+    options: commonOptions
+});
+{% endif %}
+</script>
+
+<style>
+.page-subtitle {
+    color: var(--muted);
+    margin-top: -0.5rem;
+    margin-bottom: 2rem;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: var(--shadow-md);
+}
+
+.stat-icon {
+    font-size: 2rem;
+}
+
+.stat-content {
+    flex: 1;
+}
+
+.stat-label {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-bottom: 0.25rem;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.chart-container {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 2rem;
+    box-shadow: var(--shadow-md);
+    height: 300px;
+}
+
+.time-select {
+    padding: 0.5rem 1rem;
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.btn-small {
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.btn-small:hover {
+    background: var(--primary-hover);
+}
+
+.anomaly-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border-radius: 12px;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.anomalies-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.anomaly-item {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1.5rem;
+    border-left: 4px solid;
+    box-shadow: var(--shadow-md);
+}
+
+.anomaly-item.anomaly-spike {
+    border-left-color: #ef4444;
+}
+
+.anomaly-item.anomaly-drop {
+    border-left-color: #10b981;
+}
+
+.anomaly-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.anomaly-icon {
+    font-size: 1.5rem;
+}
+
+.anomaly-header strong {
+    flex: 1;
+    color: var(--text);
+}
+
+.anomaly-time {
+    font-size: 0.875rem;
+    color: var(--muted);
+}
+
+.anomaly-body p {
+    color: var(--muted);
+    margin-bottom: 0.5rem;
+}
+
+.anomaly-link {
+    color: var(--primary);
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.anomaly-link:hover {
+    text-decoration: underline;
+}
+
+.problems-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.problem-item {
+    position: relative;
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+}
+
+.problem-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    background: rgba(59, 130, 246, 0.1);
+    transition: width 0.3s;
+}
+
+.problem-content {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.problem-name {
+    color: var(--text);
+    font-weight: 500;
+}
+
+.problem-count {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--muted);
+}
+
+.empty-state h3 {
+    color: var(--text);
+    margin-bottom: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+</style>
+{% endblock %}

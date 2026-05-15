@@ -1,0 +1,499 @@
+{% extends "base.html" %}
+
+{% block title %}{{ result.title }}{% endblock %}
+
+{% block content %}
+<main class="page-content result-content">
+    <div class="result-container">
+
+    {# ===== Top Bar ===== #}
+    <div class="top-bar">
+        <a href="{{ url_for('main.index') }}">&larr; 返回上传</a>
+        <div class="top-bar-right">
+            {% if llm_result and not llm_result.get('error') %}
+            <span class="ai-badge">AI Enhanced</span>
+            {% endif %}
+            <form action="{{ url_for('main.export_markdown') }}" method="post" style="display:inline;">
+                <textarea name="markdown" hidden>{{ markdown }}</textarea>
+                <button type="submit">导出 Markdown</button>
+            </form>
+        </div>
+    </div>
+
+    {# ===== Summary ===== #}
+    <p class="eyebrow">Diagnosis Result</p>
+    <h1>{{ result.title }}</h1>
+
+    <div class="summary-card">
+        <div class="summary-top">
+            <span class="severity-badge severity-{{ result.severity | lower }}">{{ result.severity }}</span>
+            <span class="bottleneck-label">{{ result.main_bottleneck }}</span>
+        </div>
+        <div class="summary-text">
+            {% for line in result.summary.splitlines() %}
+            <p>{{ line }}</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    {# ===== Section 1: Conclusions ===== #}
+    <section>
+        <h2>诊断结论</h2>
+        <div class="conclusion-grid">
+            {% for item in result.conclusions %}
+            <div class="conclusion-card">
+                <span class="conclusion-icon">&#9679;</span>
+                <p>{{ item }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    {# ===== Section 2: Findings ===== #}
+    {% if result.abnormal_findings %}
+    <section>
+        <h2>异常发现</h2>
+        <div class="findings-list">
+            {% for finding in result.abnormal_findings %}
+            <div class="finding-item severity-border-{{ finding.severity | lower }}">
+                <div class="finding-header">
+                    <span class="severity-dot severity-{{ finding.severity | lower }}"></span>
+                    <strong>{{ finding.name }}</strong>
+                    {% if finding.value %}<span class="finding-value">{{ finding.value }}</span>{% endif %}
+                </div>
+                {% if finding.description %}<p class="finding-desc">{{ finding.description }}</p>{% endif %}
+                {% if finding.reason %}<p class="finding-reason">{{ finding.reason }}</p>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 3: Root Causes ===== #}
+    {% if result.root_causes %}
+    <section>
+        <h2>原因分析</h2>
+        <ol class="cause-list">
+            {% for cause in result.root_causes %}
+            <li>{{ cause }}</li>
+            {% endfor %}
+        </ol>
+    </section>
+    {% endif %}
+
+    {# ===== Section 4: Propagation Chain ===== #}
+    {% if result.root_cause_flows %}
+    <section>
+        <h2>问题传播链</h2>
+        {% for flow in result.root_cause_flows %}
+        <div class="flow-block">
+            <h3>{{ flow.title }} <span class="flow-severity severity-{{ flow.severity | lower }}">{{ flow.severity }}</span></h3>
+            <p class="flow-path">
+                <span class="flow-node flow-root">{{ flow.root }}</span>
+                {% for item in flow.amplifiers %}
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-node flow-amp">{{ item }}</span>
+                {% endfor %}
+                {% for item in flow.symptoms %}
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-node flow-symptom">{{ item }}</span>
+                {% endfor %}
+            </p>
+            {% if flow.explanation %}<p class="flow-explain">{{ flow.explanation }}</p>{% endif %}
+            {% if flow.evidence %}
+            <ul class="flow-evidence">
+                {% for item in flow.evidence %}
+                <li><strong>{{ item.name }}</strong>：{{ item.value }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ===== Section 4.5: Learning Feedback ===== #}
+    {% if learning_feedback and learning_feedback.new_patterns_count > 0 %}
+    <section>
+        <h2>🧠 系统学习反馈</h2>
+        <div class="learning-feedback-card">
+            <div class="learning-stats">
+                <div class="learning-stat-item">
+                    <span class="stat-icon">✨</span>
+                    <div>
+                        <div class="stat-value">{{ learning_feedback.new_patterns_count }}</div>
+                        <div class="stat-label">本次学到新模式</div>
+                    </div>
+                </div>
+                <div class="learning-stat-item">
+                    <span class="stat-icon">📚</span>
+                    <div>
+                        <div class="stat-value">{{ learning_feedback.total_patterns }}</div>
+                        <div class="stat-label">知识库总模式</div>
+                    </div>
+                </div>
+                <div class="learning-stat-item">
+                    <span class="stat-icon">⚡</span>
+                    <div>
+                        <div class="stat-value">{{ learning_feedback.active_patterns }}</div>
+                        <div class="stat-label">活跃模式</div>
+                    </div>
+                </div>
+            </div>
+
+            {% if learning_feedback.new_patterns %}
+            <details class="learning-details" open>
+                <summary>查看新学到的诊断模式</summary>
+                <div class="new-patterns-list">
+                    {% for pattern in learning_feedback.new_patterns %}
+                    <div class="new-pattern-item">
+                        <div class="pattern-name">🎯 {{ pattern.pattern_name }}</div>
+                        <div class="pattern-conditions"><strong>触发条件：</strong>{{ pattern.conditions }}</div>
+                        <div class="pattern-solution"><strong>解决方案：</strong>{{ pattern.solution }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 5: AI Expert Analysis ===== #}
+    {% if llm_result and not llm_result.get('error') and llm_result.get('expert_analysis') %}
+    <section>
+        <h2>AI 专家分析 <span class="ai-tag">LLM</span></h2>
+        <div class="ai-analysis-card">
+            <div class="ai-analysis-text markdown-content">
+                {% for para in llm_result.expert_analysis.split('\n\n') %}
+                {% if para.strip() %}
+                <div class="analysis-paragraph">
+                    {% for line in para.split('\n') %}
+                    {% if line.strip() %}
+                    <p>{{ line }}</p>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+
+            {% if llm_result.get('key_findings') %}
+            <details class="ai-details" open>
+                <summary>关键发现 ({{ llm_result.key_findings | length }})</summary>
+                <div class="ai-findings">
+                    {% for f in llm_result.key_findings %}
+                    <div class="ai-finding-item">
+                        <span class="severity-dot severity-{{ f.get('severity', 'medium') }}"></span>
+                        <div>
+                            <strong>{{ f.get('title', '') }}</strong>
+                            <p>{{ f.get('detail', '') }}</p>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if llm_result.get('sql_recommendations') %}
+            <details class="ai-details">
+                <summary>SQL 优化建议 ({{ llm_result.sql_recommendations | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>SQL ID</th><th>问题</th><th>建议</th></tr></thead>
+                    <tbody>
+                    {% for rec in llm_result.sql_recommendations %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('sql_id', '') }}</code></td>
+                        <td>{{ rec.get('issue', '') }}</td>
+                        <td>{{ rec.get('recommendation', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+
+            {% if llm_result.get('parameter_suggestions') %}
+            <details class="ai-details">
+                <summary>参数调整建议 ({{ llm_result.parameter_suggestions | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>参数</th><th>当前问题</th><th>建议</th><th>原因</th></tr></thead>
+                    <tbody>
+                    {% for rec in llm_result.parameter_suggestions %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('parameter', '') }}</code></td>
+                        <td>{{ rec.get('current', '') }}</td>
+                        <td>{{ rec.get('recommended', '') }}</td>
+                        <td class="ev-desc">{{ rec.get('reason', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 5.5: Similar Cases ===== #}
+    {% if similar_cases %}
+    <section>
+        <h2>相似历史案例 <span class="history-tag">RAG</span></h2>
+        <div class="similar-cases-card">
+            <p class="similar-intro">基于语义匹配，在历史记录中发现 {{ similar_cases|length }} 个相似问题：</p>
+            <div class="similar-cases-list">
+                {% for case in similar_cases %}
+                <div class="similar-case-item">
+                    <div class="case-header">
+                        <span class="case-date">{{ case.created_at }}</span>
+                        {% if case.similarity %}
+                        <span class="similarity-badge">相似度: {{ "%.0f"|format(case.similarity * 100) }}%</span>
+                        {% endif %}
+                        <a href="{{ url_for('main.view_history', record_id=case.id) }}" class="case-link">查看详情 →</a>
+                    </div>
+                    <div class="case-body">
+                        <h4>{{ case.filename }}</h4>
+                        <p class="case-problem">问题：{{ case.main_problem }}</p>
+                        {% if case.diagnosis_summary %}
+                        <p class="case-summary">{{ case.diagnosis_summary[:100] }}{% if case.diagnosis_summary|length > 100 %}...{% endif %}</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 6: Evidence (Tab-based) ===== #}
+    <section>
+        <h2>关键证据</h2>
+        <div class="evidence-tabs">
+            <div class="tab-nav">
+                <button class="tab-btn active" onclick="switchTab(event, 'tab-overview')">负载概况</button>
+                <button class="tab-btn" onclick="switchTab(event, 'tab-events')">Top Events</button>
+                <button class="tab-btn" onclick="switchTab(event, 'tab-sql')">Top SQL</button>
+                {% if result.evidence.get("热点对象 (Segment Statistics)") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-segments')">热点对象</button>
+                {% endif %}
+                {% if result.evidence.get("闩锁统计 (Latch)") or result.evidence.get("锁活动 (Enqueue)") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-locks')">锁/闩锁</button>
+                {% endif %}
+                {% if result.evidence.get("OS/主机信息") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-host')">OS 信息</button>
+                {% endif %}
+            </div>
+
+            <div id="tab-overview" class="tab-panel active">
+                <h3>DB Time 构成</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("DB Time 构成", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}%</td>
+                        <td><div class="pct-bar" style="width: {{ ([item.value, 100] | min) }}%"></div></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+
+                <h3>负载指标</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for group in ["负载强度", "Load Profile"] %}
+                    {% for item in result.evidence.get(group, []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="tab-events" class="tab-panel">
+                <table class="evidence-table">
+                    <thead><tr><th>事件</th><th>等待时间</th><th>%DB Time</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("Top Events", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                        <td class="ev-desc">{{ item.description or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div id="tab-sql" class="tab-panel">
+                {% if result.evidence.get("Top SQL 详情") %}
+                <table class="evidence-table">
+                    <thead><tr><th>SQL ID</th><th>详情</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("Top SQL 详情", []) %}
+                    <tr>
+                        <td class="ev-name"><code>{{ item.name }}</code></td>
+                        <td class="ev-value" style="white-space: pre-wrap; word-break: break-all;">{{ item.value }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("Top SQL", []) %}
+                    <tr>
+                        <td class="ev-name"><code>{{ item.name }}</code></td>
+                        <td class="ev-value">{{ item.value }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+
+            {% if result.evidence.get("热点对象 (Segment Statistics)") %}
+            <div id="tab-segments" class="tab-panel">
+                <table class="evidence-table">
+                    <thead><tr><th>对象</th><th>占比</th><th>说明</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("热点对象 (Segment Statistics)", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                        <td class="ev-desc">{{ item.description or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("闩锁统计 (Latch)") or result.evidence.get("锁活动 (Enqueue)") %}
+            <div id="tab-locks" class="tab-panel">
+                {% if result.evidence.get("闩锁统计 (Latch)") %}
+                <h3>Latch</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("闩锁统计 (Latch)", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                        <td class="ev-desc">{{ item.description or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("锁活动 (Enqueue)") %}
+                <h3>Enqueue</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("锁活动 (Enqueue)", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                        <td class="ev-desc">{{ item.description or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("OS/主机信息") %}
+            <div id="tab-host" class="tab-panel">
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("OS/主机信息", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.name }}</td>
+                        <td class="ev-value">{{ item.value }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+
+    {# ===== Section 7: Smart Recommendations ===== #}
+    {% if smart_recommendations %}
+    <section>
+        <h2>🎯 智能建议</h2>
+        <div class="rec-list">
+            {% for rec in smart_recommendations %}
+            <div class="rec-item {% if rec.priority == 'P1' %}rec-p1{% elif rec.priority == 'P9' %}rec-p9{% endif %} {% if rec.get('already_optimized') %}rec-done{% endif %}">
+                <span class="rec-priority">{{ rec.priority }}</span>
+                <div class="rec-body">
+                    <p class="rec-category"><strong>{{ rec.category }}</strong></p>
+                    <p class="rec-action">{{ rec.action }}</p>
+                    {% if rec.reason %}<p class="rec-reason">{{ rec.reason }}</p>{% endif %}
+                    {% if rec.get('already_optimized') %}<p class="rec-done-badge">✓ 已优化</p>{% endif %}
+                    {% if rec.get('historical') %}<p class="rec-historical-badge">📚 历史经验</p>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 8: Recommendations ===== #}
+    {% if result.recommendations %}
+    <section>
+        <h2>处理建议</h2>
+        <div class="rec-list">
+            {% for rec in result.recommendations %}
+            <div class="rec-item {% if rec.priority == 'P1' %}rec-p1{% elif rec.priority == 'P9' %}rec-p9{% endif %}">
+                <span class="rec-priority">{{ rec.priority }}</span>
+                <div class="rec-body">
+                    <p class="rec-action">{{ rec.action }}</p>
+                    {% if rec.reason %}<p class="rec-reason">{{ rec.reason }}</p>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Section 8: Diagnostic Details (collapsed) ===== #}
+    {% if result.evidence.get("诊断明细 - 问题域") %}
+    <details class="diagnosis-details">
+        <summary>诊断明细</summary>
+        {% for group_name in ["诊断明细 - 问题域", "诊断明细 - 事件语义", "诊断明细 - Top SQL 行为"] %}
+        {% if result.evidence.get(group_name) %}
+        <h3>{{ group_name.replace("诊断明细 - ", "") }}</h3>
+        <table class="evidence-table">
+            <tbody>
+            {% for item in result.evidence.get(group_name, []) %}
+            <tr>
+                <td class="ev-name">{{ item.name }}</td>
+                <td class="ev-value">{{ item.value }}</td>
+                {% if item.description %}<td class="ev-desc">{{ item.description }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% endfor %}
+    </details>
+    {% endif %}
+
+    </div>
+</main>
+
+<script>
+function switchTab(event, tabId) {
+    const container = event.target.closest('.evidence-tabs');
+    container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    container.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+}
+</script>
+{% endblock %}

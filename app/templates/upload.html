@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+
+{% block title %}Oracle AWR 分析{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <section class="workspace-section">
+        <div class="section-heading">
+            <h2>Oracle AWR 报告分析</h2>
+            <p>上传 Oracle AWR HTML 报告，自动解析性能瓶颈、异常指标和处理建议。</p>
+        </div>
+
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <div class="message">
+            {% for message in messages %}
+            <p>{{ message }}</p>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <div class="upload-layout">
+            <form action="{{ url_for('main.analyze') }}" method="post" enctype="multipart/form-data" class="upload-card" id="upload-form">
+                <input type="hidden" name="analyzer_type" value="oracle_awr">
+
+                <div class="form-group">
+                    <label for="file">报告文件</label>
+                    <div class="file-upload-area" id="file-upload-area">
+                        <input id="file" type="file" name="file" accept=".html,.htm,.txt" required style="display: none;">
+                        <div class="upload-prompt">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: 1rem; opacity: 0.5;">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <p><strong>拖拽文件到此处</strong> 或 <span class="upload-link" id="upload-link">点击上传</span></p>
+                            <p class="field-help" style="margin-top: 0.5rem;">支持 Oracle AWR HTML / HTM，单文件最大 50MB</p>
+                        </div>
+                        <div class="file-selected" id="file-selected" style="display: none;">
+                            <span id="file-name"></span>
+                            <button type="button" class="remove-file" id="remove-file">✕</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" type="submit" id="submit-btn">开始分析</button>
+
+                <!-- Loading Status -->
+                <div id="loading-status" style="display: none; margin-top: 1.5rem;">
+                    <div class="progress-container">
+                        <div class="progress-spinner">
+                            <div class="spinner"></div>
+                        </div>
+                        <div class="progress-info">
+                            <div class="progress-stage" id="progress-stage">正在分析中...</div>
+                            <div class="progress-tip" id="progress-tip">分析通常需要 30-60 秒，请耐心等待</div>
+                            <div class="progress-bar-track">
+                                <div class="progress-bar-fill" id="progress-bar"></div>
+                            </div>
+                            <div class="progress-time" id="progress-time"></div>
+                            <div class="progress-note">提示：即使关闭页面，分析也会在后台继续进行，结果将保存到历史记录中</div>
+                        </div>
+                    </div>
+                </div>
+            </form>
+
+            <div class="analysis-note">
+                <h3>诊断能力</h3>
+                <ul>
+                    <li>CPU、I/O、Commit、Parse、内存压力等多维问题域分析</li>
+                    <li>等待事件语义分类与根因链路追踪</li>
+                    <li>Top SQL 行为分析（执行次数、Gets/Exec、SQL 文本）</li>
+                    <li>Segment / Latch / Enqueue 热点对象识别</li>
+                    <li>LLM AI 增强分析（需在设置页配置）</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+</main>
+
+<style>
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.file-upload-area {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.file-upload-area:hover {
+    border-color: var(--primary);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.file-upload-area.drag-over {
+    border-color: var(--primary);
+    background: rgba(59, 130, 246, 0.15);
+    transform: scale(1.02);
+}
+
+.upload-prompt p {
+    margin: 0;
+    color: var(--text);
+}
+
+.upload-link {
+    color: var(--primary);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.upload-link:hover {
+    color: var(--primary-hover);
+}
+
+.file-selected {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem;
+    background: rgba(34, 197, 94, 0.1);
+    border-radius: 6px;
+}
+
+.file-selected span {
+    color: var(--success);
+    font-weight: 500;
+}
+
+.remove-file {
+    background: none;
+    border: none;
+    color: var(--danger);
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+.remove-file:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* Progress Styles */
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 10px;
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.progress-spinner {
+    flex-shrink: 0;
+}
+
+.spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(59, 130, 246, 0.2);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.progress-info {
+    flex: 1;
+    text-align: left;
+}
+
+.progress-stage {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 0.5rem;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.progress-tip {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+}
+
+.progress-bar-track {
+    height: 4px;
+    background: rgba(59, 130, 246, 0.15);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+    border-radius: 2px;
+    transition: width 1s ease;
+}
+
+.progress-time {
+    font-size: 12px;
+    color: var(--muted-2);
+    margin-bottom: 0.5rem;
+    font-family: Consolas, "JetBrains Mono", monospace;
+}
+
+.progress-note {
+    font-size: 12px;
+    color: var(--text);
+    padding: 0.5rem 0.75rem;
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 3px solid var(--primary);
+    border-radius: 4px;
+}
+</style>
+
+<script>
+const fileInput = document.getElementById('file');
+const uploadArea = document.getElementById('file-upload-area');
+const uploadLink = document.getElementById('upload-link');
+const uploadPrompt = uploadArea.querySelector('.upload-prompt');
+const fileSelected = document.getElementById('file-selected');
+const fileName = document.getElementById('file-name');
+const removeFile = document.getElementById('remove-file');
+
+// Click to upload
+uploadLink.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInput.click();
+});
+
+uploadArea.addEventListener('click', () => {
+    fileInput.click();
+});
+
+// File input change
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        showSelectedFile(e.target.files[0]);
+    }
+});
+
+// Drag and drop
+uploadArea.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadArea.classList.add('drag-over');
+});
+
+uploadArea.addEventListener('dragleave', () => {
+    uploadArea.classList.remove('drag-over');
+});
+
+uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('drag-over');
+
+    if (e.dataTransfer.files.length > 0) {
+        fileInput.files = e.dataTransfer.files;
+        showSelectedFile(e.dataTransfer.files[0]);
+    }
+});
+
+// Remove file
+removeFile.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInput.value = '';
+    uploadPrompt.style.display = 'block';
+    fileSelected.style.display = 'none';
+});
+
+function showSelectedFile(file) {
+    fileName.textContent = file.name;
+    uploadPrompt.style.display = 'none';
+    fileSelected.style.display = 'flex';
+}
+
+// Form submit
+document.getElementById('upload-form').addEventListener('submit', function() {
+    const btn = document.getElementById('submit-btn');
+    const loading = document.getElementById('loading-status');
+    const timeEl = document.getElementById('progress-time');
+    const barEl = document.getElementById('progress-bar');
+
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    loading.style.display = 'block';
+
+    // Show elapsed time counter
+    const startTime = Date.now();
+    barEl.style.width = '15%';
+
+    const timer = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        timeEl.textContent = '已用时 ' + elapsed + ' 秒';
+
+        // Animate progress bar - slow crawl since we don't know real progress
+        const pct = Math.min(90, 15 + elapsed * 1.5);
+        barEl.style.width = pct + '%';
+    }, 1000);
+
+    // If page unloads (navigation to result), clean up
+    window.addEventListener('beforeunload', () => clearInterval(timer));
+});
+</script>
+{% endblock %}

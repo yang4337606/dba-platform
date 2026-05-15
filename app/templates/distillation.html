@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+
+{% block title %}知识蒸馏结果{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <section class="workspace-section" style="max-width: 960px;">
+        <div class="section-heading">
+            <p class="eyebrow">Knowledge Distillation</p>
+            <h2>蒸馏结果审查</h2>
+            <p>请审查 AI 提议的变更，确认无误后点击「应用」。</p>
+        </div>
+
+        {% if status == "running" %}
+        <div class="distill-running">
+            <div class="spinner"></div>
+            <p>蒸馏正在进行中...</p>
+            <p style="font-size: 13px; color: var(--muted);">页面会自动刷新</p>
+            <script>setTimeout(() => location.reload(), 5000);</script>
+        </div>
+        {% elif status == "completed" and report %}
+
+        {# Summary #}
+        <div class="distill-summary-card">
+            <h3 style="margin-top: 0;">蒸馏总结</h3>
+            <p style="color: var(--muted); line-height: 1.8;">{{ report.get('summary', '无') }}</p>
+            <div class="distill-stats-row">
+                <span>审查了 <strong>{{ report.pattern_count_before }}</strong> 个模式</span>
+                <span>参考了 <strong>{{ report.case_count_reviewed }}</strong> 个案例</span>
+            </div>
+        </div>
+
+        {# Merge Groups #}
+        {% if report.get('merge_groups') %}
+        <section>
+            <h2>模式合并 <span class="distill-count">{{ report.merge_groups|length }}</span></h2>
+            {% for group in report.merge_groups %}
+            <div class="distill-card">
+                <div class="distill-card-header">
+                    <strong>{{ group.get('reason', '') }}</strong>
+                </div>
+                <div class="distill-before-after">
+                    <div class="distill-side distill-before">
+                        <h4>合并前</h4>
+                        {% for orig in group.get('_originals', []) %}
+                        <div class="distill-pattern-mini">
+                            <span class="distill-pname">{{ orig.get('name', '?') }}</span>
+                            <span class="distill-pmeta">{{ orig.get('status', '') }} | 置信度 {{ "%.2f"|format(orig.get('confidence', 0)) }}</span>
+                            <p class="distill-pcond">{{ orig.get('conditions', '') }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <div class="distill-arrow">&rarr;</div>
+                    <div class="distill-side distill-after">
+                        <h4>合并后</h4>
+                        {% set merged = group.get('merged_pattern', {}) %}
+                        <div class="distill-pattern-mini highlight">
+                            <span class="distill-pname">{{ merged.get('name', '') }}</span>
+                            <p class="distill-pcond">{{ merged.get('conditions', '') }}</p>
+                            <p class="distill-psol">{{ merged.get('solution', '') }}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {# Refinements #}
+        {% if report.get('refinements') %}
+        <section>
+            <h2>模式精炼 <span class="distill-count">{{ report.refinements|length }}</span></h2>
+            {% for ref in report.refinements %}
+            <div class="distill-card">
+                <div class="distill-card-header">
+                    <strong>{{ ref._original.get('name', ref.get('pattern_id', '')) }}</strong>
+                    <span class="distill-reason">{{ ref.get('reason', '') }}</span>
+                </div>
+                <div class="distill-before-after">
+                    <div class="distill-side distill-before">
+                        <h4>修改前</h4>
+                        <p class="distill-pcond"><strong>条件：</strong>{{ ref._original.get('conditions', '无') }}</p>
+                        <p class="distill-psol"><strong>方案：</strong>{{ ref._original.get('solution', '无') }}</p>
+                    </div>
+                    <div class="distill-arrow">&rarr;</div>
+                    <div class="distill-side distill-after">
+                        <h4>修改后</h4>
+                        {% set changes = ref.get('changes', {}) %}
+                        <p class="distill-pcond"><strong>条件：</strong>{{ changes.get('conditions', ref._original.get('conditions', '无')) }}</p>
+                        <p class="distill-psol"><strong>方案：</strong>{{ changes.get('solution', ref._original.get('solution', '无')) }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {# New Patterns #}
+        {% if report.get('new_patterns') %}
+        <section>
+            <h2>新发现模式 <span class="distill-count">{{ report.new_patterns|length }}</span></h2>
+            {% for np in report.new_patterns %}
+            <div class="distill-card highlight-new">
+                <span class="distill-pname">{{ np.get('name', '') }}</span>
+                <p class="distill-pcond"><strong>条件：</strong>{{ np.get('conditions', '') }}</p>
+                <p class="distill-psol"><strong>方案：</strong>{{ np.get('solution', '') }}</p>
+                {% if np.get('evidence') %}
+                <p class="distill-evidence"><strong>依据：</strong>{{ np.evidence }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {# Confidence Adjustments #}
+        {% if report.get('confidence_adjustments') %}
+        <section>
+            <h2>置信度调整 <span class="distill-count">{{ report.confidence_adjustments|length }}</span></h2>
+            <table class="evidence-table">
+                <thead><tr><th>模式</th><th>当前</th><th>建议</th><th>理由</th></tr></thead>
+                <tbody>
+                {% for adj in report.confidence_adjustments %}
+                <tr>
+                    <td class="ev-name">{{ adj._original.get('name', adj.get('pattern_id', '')) }}</td>
+                    <td class="ev-value">{{ "%.2f"|format(adj._original.get('confidence', 0)) }}</td>
+                    <td class="ev-value" style="color: var(--success);">{{ "%.2f"|format(adj.get('new_confidence', 0)) }}</td>
+                    <td class="ev-desc">{{ adj.get('reason', '') }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        {% endif %}
+
+        {# Suppressed Patterns #}
+        {% if report.get('suppressed_patterns') %}
+        <section>
+            <h2>建议淘汰 <span class="distill-count">{{ report.suppressed_patterns|length }}</span></h2>
+            {% for sp in report.suppressed_patterns %}
+            <div class="distill-card distill-suppressed">
+                <div class="distill-card-header">
+                    <strong>{{ sp._original.get('name', sp.get('pattern_id', '')) }}</strong>
+                    <span class="distill-pmeta">置信度 {{ "%.2f"|format(sp._original.get('confidence', 0)) }} | 命中 {{ sp._original.get('hit_count', 0) }}</span>
+                </div>
+                <p class="distill-reason">{{ sp.get('reason', '') }}</p>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {# Action Buttons #}
+        <div class="distill-actions">
+            <a href="{{ url_for('main.settings') }}" class="btn btn-secondary">取消</a>
+            <form action="{{ url_for('main.distill_apply') }}" method="post" style="display:inline;" onsubmit="return confirm('确定应用蒸馏结果？将备份当前模式库后再修改。')">
+                <input type="hidden" name="task_id" value="{{ task_id }}">
+                <button class="btn btn-primary" type="submit">应用蒸馏结果</button>
+            </form>
+        </div>
+
+        {% endif %}
+    </section>
+</main>
+
+<style>
+.distill-running {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(59, 130, 246, 0.2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.distill-summary-card {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), rgba(139, 92, 246, 0.06));
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 32px;
+}
+
+.distill-stats-row {
+    display: flex;
+    gap: 24px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.distill-count {
+    display: inline-block;
+    padding: 2px 10px;
+    background: var(--accent-soft);
+    color: #8fc0ff;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+.distill-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 12px;
+}
+
+.distill-card.highlight-new {
+    border-color: rgba(16, 185, 129, 0.3);
+    border-left: 4px solid var(--success);
+}
+
+.distill-card.distill-suppressed {
+    border-color: rgba(239, 68, 68, 0.2);
+    opacity: 0.8;
+}
+
+.distill-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.distill-before-after {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.distill-side {
+    flex: 1;
+    padding: 14px;
+    border-radius: 8px;
+    min-width: 0;
+}
+
+.distill-before {
+    background: rgba(239, 68, 68, 0.04);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.distill-after {
+    background: rgba(16, 185, 129, 0.04);
+    border: 1px solid rgba(16, 185, 129, 0.15);
+}
+
+.distill-side h4 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+}
+
+.distill-arrow {
+    display: flex;
+    align-items: center;
+    color: var(--muted-2);
+    font-size: 20px;
+    flex-shrink: 0;
+    padding-top: 30px;
+}
+
+.distill-pattern-mini {
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+}
+
+.distill-pattern-mini.highlight {
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.distill-pname {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 14px;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.distill-pmeta {
+    font-size: 11px;
+    color: var(--muted-2);
+    display: block;
+    margin-bottom: 6px;
+}
+
+.distill-pcond {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 4px 0;
+    line-height: 1.6;
+}
+
+.distill-psol {
+    font-size: 13px;
+    color: #8fc0ff;
+    margin: 4px 0;
+    line-height: 1.6;
+}
+
+.distill-evidence {
+    font-size: 12px;
+    color: var(--muted-2);
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border-radius: 4px;
+    border-left: 3px solid var(--accent);
+}
+
+.distill-reason {
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+}
+
+.distill-actions {
+    display: flex;
+    gap: 16px;
+    justify-content: flex-end;
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+}
+
+@media (max-width: 720px) {
+    .distill-before-after {
+        flex-direction: column;
+    }
+
+    .distill-arrow {
+        transform: rotate(90deg);
+        padding: 0;
+        align-self: center;
+    }
+}
+</style>
+{% endblock %}

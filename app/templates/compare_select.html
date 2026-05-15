@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}选择对比记录{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <section class="workspace-section">
+        <div class="section-heading">
+            <h2>历史对比</h2>
+            <p>选择两条记录进行性能对比分析</p>
+        </div>
+
+        {% if history and history|length >= 2 %}
+        <form action="{{ url_for('main.compare_result') }}" method="get" class="compare-form">
+            <div class="compare-selection">
+                <div class="selection-box">
+                    <h3>基准记录（旧）</h3>
+                    <select name="record1" required class="record-select">
+                        <option value="">-- 选择记录 --</option>
+                        {% for record in history %}
+                        <option value="{{ record.id }}">
+                            {{ record.created_at }} - {{ record.filename }}
+                            {% if record.main_problem %}({{ record.main_problem }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="compare-arrow">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                </div>
+
+                <div class="selection-box">
+                    <h3>对比记录（新）</h3>
+                    <select name="record2" required class="record-select">
+                        <option value="">-- 选择记录 --</option>
+                        {% for record in history %}
+                        <option value="{{ record.id }}">
+                            {{ record.created_at }} - {{ record.filename }}
+                            {% if record.main_problem %}({{ record.main_problem }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <a href="{{ url_for('main.history') }}" class="btn btn-secondary">取消</a>
+                <button type="submit" class="btn btn-primary">开始对比</button>
+            </div>
+        </form>
+        {% else %}
+        <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity: 0.3; margin-bottom: 1rem;">
+                <path d="M9 11l3 3L22 4"></path>
+                <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path>
+            </svg>
+            <h3>记录不足</h3>
+            <p>至少需要两条历史记录才能进行对比</p>
+            <a href="{{ url_for('main.index') }}" class="btn btn-primary" style="margin-top: 1rem;">开始分析</a>
+        </div>
+        {% endif %}
+    </section>
+</main>
+
+<style>
+.compare-form {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 2rem;
+    box-shadow: var(--shadow-md);
+}
+
+.compare-selection {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+.selection-box {
+    flex: 1;
+}
+
+.selection-box h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 1rem;
+}
+
+.record-select {
+    width: 100%;
+    padding: 0.75rem;
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+.record-select:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.record-select option {
+    padding: 0.5rem;
+}
+
+.compare-arrow {
+    color: var(--muted);
+    flex-shrink: 0;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+}
+
+.btn {
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-block;
+    border: none;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+
+.btn-secondary {
+    background: var(--card-bg);
+    color: var(--text);
+    border: 2px solid var(--border);
+}
+
+.btn-secondary:hover {
+    border-color: var(--primary);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--muted);
+}
+
+.empty-state h3 {
+    color: var(--text);
+    margin-bottom: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .compare-selection {
+        flex-direction: column;
+    }
+
+    .compare-arrow {
+        transform: rotate(90deg);
+    }
+}
+</style>
+{% endblock %}

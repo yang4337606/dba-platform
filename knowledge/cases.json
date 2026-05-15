@@ -1,0 +1,401 @@
+{
+  "cases": [
+    {
+      "id": "c7588fd3",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 4.91,
+        "db_cpu_pct": 91.8,
+        "commit_pct": 4.6,
+        "user_io_pct": 7.0,
+        "parse_pct": 1.66
+      },
+      "top_sql_ids": [
+        "9jtcyxaq267v6",
+        "3vdcq6myfv754",
+        "3mh5fnzq2fvp5",
+        "bk47s321b0ytk",
+        "0fd1wshhhz8r5"
+      ],
+      "llm_summary": "当前系统呈现出典型的'逻辑 CPU 瓶颈'特征，而非物理硬件资源不足。虽然主机 CPU 空闲率高达 71.41%，但 DB Time 是 Elapsed Time 的 5 倍，且 91.8% 的数据库时间消耗在 DB CPU 上，这表明数据库正在高效地执行大量低效的 SQL 逻辑。核心问题在于极高的逻辑读（Logical Reads）吞吐量（167 万次/秒），主要由 Top SQL 的全表扫描或低效索引范围扫描引起，导致 CPU 周期被浪费在处理不必要的数据块上。\n\n具体来看，SQL_ID 为 9jtcyxaq267v6 的语句是首要罪魁祸首，单次执行消耗 7.5 万次逻辑读，且执行频率高达 1.7 万次，仅此一条 SQL 就贡献了 13 亿次逻辑读。结合热点对象分析，表 INV_LOT_LPN_ONHAND 和 SCADA_TASK 占据了超过 50% 的逻辑读，说明核心业务表的访问路径存在严重缺陷。此外，ACC_WRZZ3  schema 下的报表类 SQL 单次执行逻辑读超过 11 万次，属于典型的大结果集全表扫描。\n\n应用层逻辑也存在显著异常。回滚率（738 次/秒）远高于提",
+      "learned_pattern_ids": [
+        "高逻辑读 CPU 瓶颈模式",
+        "事务回滚异常模式",
+        "函数索引失效模式"
+      ],
+      "created_at": "2026-05-14T08:28:00.462864"
+    },
+    {
+      "id": "4621e393",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 4.91,
+        "db_cpu_pct": 91.8,
+        "commit_pct": 4.6,
+        "user_io_pct": 7.0,
+        "parse_pct": 1.66
+      },
+      "top_sql_ids": [
+        "9jtcyxaq267v6",
+        "3vdcq6myfv754",
+        "3mh5fnzq2fvp5",
+        "bk47s321b0ytk",
+        "0fd1wshhhz8r5"
+      ],
+      "llm_summary": "当前系统呈现出典型的'CPU 效率型'瓶颈，而非硬件资源不足。虽然 DB CPU 等待占比高达 91.8%，但主机 CPU 空闲率仍有 71.41%，且 AAS 仅为 4.91（远低于 20 核），这说明数据库并未饱和，而是单个会话在执行过程中消耗了过多的 CPU 周期。核心根因在于逻辑 I/O 过高，Top SQL 产生了 13 亿次 Buffer Gets，导致 CPU 时间大量消耗在内存块的处理上，而非等待硬件资源。\n\n事务健康度存在严重异常，回滚率远高于提交率。实例活动显示每秒回滚 738 次，而提交仅 105 次，比例接近 7:1。这意味着应用程序存在大量的事务重试、逻辑错误或批处理失败，导致 CPU 浪费在 Undo 块的管理和 Redo 生成上，同时也加剧了 `log file sync` 等待（占比 4.6%）。\n\nTop SQL 语义分析显示，主要负载集中在 MES 系统的库存和任务表（INV_LOT_LPN_ONHAND, SCADA_TASK）。SQL_ID 9jtcyxaq267v6 单次执行消耗约 7.5 万次逻辑读，极可能存在全表扫描或索引失效。此外，部分 ",
+      "learned_pattern_ids": [
+        "高逻辑读 CPU 瓶颈",
+        "事务回滚风暴",
+        "提交风暴"
+      ],
+      "created_at": "2026-05-14T08:31:46.122212"
+    },
+    {
+      "id": "23f866ef",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 4.91,
+        "db_cpu_pct": 91.8,
+        "commit_pct": 4.6,
+        "user_io_pct": 7.0,
+        "parse_pct": 1.66
+      },
+      "top_sql_ids": [
+        "9jtcyxaq267v6",
+        "3vdcq6myfv754",
+        "3mh5fnzq2fvp5",
+        "bk47s321b0ytk",
+        "0fd1wshhhz8r5"
+      ],
+      "llm_summary": "当前系统呈现典型的“会话级计算密集但主机资源闲置”特征。DB Time中91.8%消耗在DB CPU上，但Host Idle高达71.41%，说明物理CPU并未饱和，瓶颈源于大量会话在执行低效SQL。Load Profile显示Logical Read/sec高达167.6万，结合Top SQL单次执行Buffer Gets达7.5万~11万，表明核心查询严重依赖全表扫描或低效嵌套循环，导致CPU在内存块遍历上空转。Top SQL文本中大量出现`SELECT \"T0\".*`及`to_char(ID)`，是典型ORM框架（如Hibernate/MyBatis）未规范使用绑定变量、未精准投影列、且存在隐式类型转换的反模式，直接导致索引失效与执行计划劣化。\n\n实例活动数据暴露出另一个严重隐患：Rollbacks/sec（738.11）是Commits/sec（105.24）的7倍。如此高的回滚率通常意味着应用层存在频繁的业务校验失败、循环内异常捕获回滚、或批量任务设计缺陷。这不仅浪费CPU与Redo/Undo资源，还会加剧`log file sync`等待（当前占比4.6%），并可能引发Un",
+      "learned_pattern_ids": [
+        "逻辑读驱动型CPU瓶颈",
+        "高频回滚事务风暴",
+        "ORM隐式转换导致索引失效"
+      ],
+      "created_at": "2026-05-14T08:41:18.654609"
+    },
+    {
+      "id": "6a9031c5",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 4.91,
+        "db_cpu_pct": 91.8,
+        "commit_pct": 4.6,
+        "user_io_pct": 7.0,
+        "parse_pct": 1.66
+      },
+      "top_sql_ids": [
+        "9jtcyxaq267v6",
+        "3vdcq6myfv754",
+        "3mh5fnzq2fvp5",
+        "bk47s321b0ytk",
+        "0fd1wshhhz8r5"
+      ],
+      "llm_summary": "该AWR报告呈现典型的“SQL低效驱动型CPU消耗”特征。DB CPU占比高达91.8%，但主机CPU空闲率仍有71.41%，且AAS(4.91)远低于20核，说明硬件算力充足，瓶颈完全源于数据库内部执行效率低下。核心矛盾在于极高的逻辑读（Logical Read/sec达167万）与异常的回滚率（Rollbacks/sec高达738，是Commits/sec的7倍）。高频逻辑读直接转化为CPU开销（Buffer Cache管理、行处理、谓词过滤），而海量回滚不仅产生大量Undo/Redo管理开销，还推高了`log file sync`等待（4.6%），表明应用层存在严重的事务管理缺陷或异常重试逻辑。\n\n从Top SQL语义分析，`9jtcyxaq267v6`和`3vdcq6myfv754`执行频次极高（1.7万/2.5万次），单次逻辑读分别达7.5万和7700，结合`SELECT *`和热点对象`INV_LOT_LPN_ONHAND`、`SCADA_TASK`，可判定存在索引缺失、统计信息陈旧或CBO误选全表扫描/哈希连接。此外，`3mh5fnzq2fvp5`等多条SQL使用`to_",
+      "learned_pattern_ids": [
+        "隐式转换引发全表扫描与CPU飙升",
+        "高频回滚导致事务开销激增",
+        "逻辑读虚高掩盖真实I/O瓶颈"
+      ],
+      "created_at": "2026-05-14T09:07:21.339335"
+    },
+    {
+      "id": "f44deea9",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 1.27,
+        "db_cpu_pct": 92.1,
+        "commit_pct": 1.7,
+        "user_io_pct": 0.6,
+        "parse_pct": 43.93
+      },
+      "top_sql_ids": [
+        "8vgz0m72d5sp9",
+        "0gwc9vhhygvbb",
+        "cz8wbmy7k5bxn",
+        "bgxtkrz2p3k08",
+        "0az7czjdw8z7j"
+      ],
+      "llm_summary": "整体来看，该数据库处于典型的轻负载状态（AAS仅1.27，128核主机CPU空闲率高达97.38%）。规则引擎提示的“CPU瓶颈”实为相对指标：由于系统等待极少，DB CPU占比高达92.1%，但绝对消耗极低，并非真正的资源饱和。核心隐患在于极高的解析开销与单条SQL的逻辑读爆炸。Load Profile显示每秒执行903次，解析高达774次，解析/执行比接近85.7%，表明应用端极可能未合理使用绑定变量、频繁开关连接或游标缓存策略失效，导致大量软解析无谓消耗CPU。Top SQL中`bgxtkrz2p3k08`（查询V_$PARAMETER）执行近4.9万次，是典型的“应用重复查询动态视图/参数”反模式，应改为本地缓存。",
+      "learned_pattern_ids": [],
+      "created_at": "2026-05-14T12:00:49.267489"
+    },
+    {
+      "id": "c8309aba",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 1.27,
+        "db_cpu_pct": 92.1,
+        "commit_pct": 1.7,
+        "user_io_pct": 0.6,
+        "parse_pct": 43.93
+      },
+      "top_sql_ids": [
+        "8vgz0m72d5sp9",
+        "0gwc9vhhygvbb",
+        "cz8wbmy7k5bxn",
+        "bgxtkrz2p3k08",
+        "0az7czjdw8z7j"
+      ],
+      "llm_summary": "综合评估，该数据库并未出现真实的CPU资源瓶颈。规则引擎提示的“CPU瓶颈”属于典型误判：尽管DB CPU占DB Time的92.1%，但128核主机CPU空闲率高达97.38%，且AAS仅为1.27，表明整体负载极轻。此处的“CPU消耗”实质是SQL执行耗时，而非系统级资源争用，盲目扩容CPU毫无意义。\n\n当前性能消耗高度集中于单条SQL（8vgz0m72d5sp9）。该语句仅执行1次，却产生2.09亿逻辑读，且大量访问SYS.EXP_STAT$对象。结合SQL片段“with non_existent_objs as...”，可推断其为复杂的CTE递归查询或统计信息导出任务。由于缺乏有效过滤或统计信息陈旧，导致优化器选择全表扫描或低效嵌套循环，引发海量Buffer Gets。此外，Parse Count与Execute Count比例高达85.6%，暴露出应用层可能大量使用字面量SQL或未复用游标，虽在当前低负载下未引发严重Library Cache争用，但属于长期架构隐患。\n\nRAC层面的Cluster等待（gc current/cr block）占比8.4%，属于正常跨节点数据同",
+      "learned_pattern_ids": [
+        "伪CPU瓶颈模式",
+        "高解析低负载模式",
+        "高频短等待索引争用"
+      ],
+      "created_at": "2026-05-14T13:02:33.926253"
+    },
+    {
+      "id": "3150e04d",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 1.27,
+        "db_cpu_pct": 92.1,
+        "commit_pct": 1.7,
+        "user_io_pct": 0.6,
+        "parse_pct": 43.93
+      },
+      "top_sql_ids": [
+        "8vgz0m72d5sp9",
+        "0gwc9vhhygvbb",
+        "cz8wbmy7k5bxn",
+        "bgxtkrz2p3k08",
+        "0az7czjdw8z7j"
+      ],
+      "llm_summary": "首先，规则引擎提示的“CPU瓶颈”具有严重误导性。尽管DB CPU占DB Time的92.1%，但主机128核CPU空闲率高达97.38%，且AAS仅为1.27。这表明数据库整体负载极低，远未触及硬件天花板。所谓的“CPU消耗”实则是低效SQL在无其他显著等待事件时产生的相对占比，并非真正的资源饱和。核心问题在于个别SQL的逻辑读（LIO）极其庞大，以及后台维护任务带来的累积开销。\n其次，SQL_ID 8vgz0m72d5sp9 单次执行消耗了2.09亿次Buffer Gets和26.5万次物理读，是典型的执行计划劣化或缺失索引导致的全表扫描/笛卡尔积。结合热点对象 SYS.EXP_STAT$ 的高频访问，该SQL可能涉及数据字典或统计信息表的低效关联。同时，Top SQL中大量出现 dbms_aqadm 和 dbms_aq_inv 调用（各近7000次），说明高级队列（AQ）的清理机制过于频繁且未批量处理，叠加 TX-Transaction (index contention) 的5.8万次等待，暗示存在基于序列生成的右倾索引热点块竞争。\n此外，每秒903次执行对应774次解析，解析",
+      "learned_pattern_ids": [
+        "伪CPU瓶颈识别模式",
+        "高频监控/心跳查询模式",
+        "AQ队列清理与索引右倾竞争模式",
+        "备份期FRA计算阻塞模式"
+      ],
+      "created_at": "2026-05-14T13:06:00.556396"
+    },
+    {
+      "id": "c354a0fc",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 1.27,
+        "db_cpu_pct": 92.1,
+        "commit_pct": 1.7,
+        "user_io_pct": 0.6,
+        "parse_pct": 43.93
+      },
+      "top_sql_ids": [
+        "8vgz0m72d5sp9",
+        "0gwc9vhhygvbb",
+        "cz8wbmy7k5bxn",
+        "bgxtkrz2p3k08",
+        "0az7czjdw8z7j"
+      ],
+      "llm_summary": "整体来看，该实例处于典型的“低绝对负载、高相对CPU消耗”状态。128核主机空闲率高达97.38%，AAS仅1.27，说明系统远未触及硬件资源瓶颈。规则引擎标记的“CPU瓶颈”实为DB Time内部结构失衡：DB CPU占比92.1%，但绝对消耗仅约140分钟，在2小时内分摊到单核上压力极小。真正的性能损耗源于内部逻辑低效与资源调度摩擦，而非算力不足。\n\n核心根因集中在三个维度：一是解析开销畸高，Parse Count (557万) 与 Execute Count (650万) 比例高达85.6%，表明大量SQL未复用游标或频繁硬解析，直接推高了DB CPU占比；二是存在单次执行消耗2.09亿逻辑读的巨型查询（8vgz0m72d5sp9），该语句深度关联SYS.EXP_STAT$，疑似执行全量统计信息校验或导出，缺乏有效过滤条件导致Buffer Cache被无效冲刷；三是RAC环境下的并发DML引发索引热块争用（TX-index contention 5.8万次），叠加AQ队列维护与FRA空间计算（平均等待19秒），进一步放大了CPU与Cluster等待。\n\n优化方向应遵循“降解析、优",
+      "learned_pattern_ids": [
+        "高解析率伪CPU瓶颈",
+        "RAC索引热块争用模式",
+        "FRA归档计算阻塞模式"
+      ],
+      "created_at": "2026-05-14T13:17:48.143642"
+    },
+    {
+      "id": "c189e9e1",
+      "db_name": "unknown",
+      "severity": "WARNING",
+      "main_bottleneck": "存储 I/O 链路等待",
+      "key_metrics": {
+        "aas": 0.01,
+        "db_cpu_pct": 16.2,
+        "commit_pct": 3.6,
+        "user_io_pct": 11.5,
+        "parse_pct": 9.42
+      },
+      "top_sql_ids": [
+        "b6usrg82hwsa3",
+        "6mcpb06rctk0x",
+        "5zruc4v6y32f9",
+        "8szmwam7fysa3",
+        "6gvch1xu9ca3g"
+      ],
+      "llm_summary": "整体负载极低，系统处于深度空闲状态。Elapsed长达10739分钟（约7.46天），但DB Time仅104.71分钟，AAS低至0.01，主机CPU空闲率高达99.42%。这表明该时段内数据库几乎无并发业务压力。规则引擎提示的“存储I/O链路等待”并非真实业务瓶颈，而是后台维护任务在极低活跃会话基数下产生的统计占比失真。在AAS<0.1的场景下，任何后台I/O都会在Wait Class占比中被放大，不应直接等同于存储性能故障。\n\nSystem I/O占比高达74.3%，结合Top SQL列表可知，该等待完全由Oracle内部后台进程主导。`dbms_stats`（统计信息收集）、`dbms_space.auto_space_advisor`（空间顾问）、AWR快照写入（`WRH$_SQLSTAT`）及内存顾问（`shared_pool_size_for_estimate`）等任务集中执行，消耗了绝大部分DB Time。这些任务属于常规健康检查与元数据维护，其I/O属于后台异步或低优先级操作，且`log file sync`仅占3.5%（220秒/7.5天），进一步印证了提交链路和存",
+      "learned_pattern_ids": [
+        "低AAS高System I/O占比陷阱",
+        "动态采样(DS_SVC)引发解析开销",
+        "内部顾问任务集中执行导致I/O尖峰"
+      ],
+      "created_at": "2026-05-15T05:19:44.014468"
+    },
+    {
+      "id": "15771d60",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 0.0,
+        "db_cpu_pct": 52.7,
+        "commit_pct": 11.4,
+        "user_io_pct": 5.5,
+        "parse_pct": 14.07
+      },
+      "top_sql_ids": [
+        "b6usrg82hwsa3",
+        "6gvch1xu9ca3g",
+        "9n784kvb0hhdj",
+        "aykvshm7zsabd",
+        "6mcpb06rctk0x"
+      ],
+      "llm_summary": "该AWR报告反映的数据库处于极度空闲状态。在长达近11小时的快照窗口内，DB Time仅2.09分钟，AAS为0.0，主机CPU空闲率高达99.56%，说明系统整体负载极低。规则引擎提示的“CPU瓶颈”实为误报，因为DB CPU绝对耗时仅66.2秒，占总时间比例微乎其微，远未达到性能瓶颈阈值。当前数据库时间几乎全部被Oracle内置的自动化维护任务和顾问程序（Advisor）消耗，包括统计信息收集、空间顾问、SGA/Shared Pool内存评估查询以及Job调度器PL/SQL块。真正的业务SQL仅见clinic_update调用1次，未形成持续负载。\n\n等待事件方面，log file sync、latch: shared pool、db file sequential read的绝对等待时间均在秒级，属于正常微抖动。Wait Class中System I/O占比高达284.3%是低负载下的统计放大现象，主要源于DBWR、LGWR、MMON等后台进程的正常刷盘与AWR数据落盘，无需干预。热点对象集中在SYS.WRH$_SQLSTAT（AWR基表）和数据字典表，进一步印证了当前活动以元数",
+      "learned_pattern_ids": [
+        "空闲实例维护任务过载模式"
+      ],
+      "created_at": "2026-05-15T05:50:58.406069"
+    },
+    {
+      "id": "efccde95",
+      "db_name": "unknown",
+      "severity": "WARNING",
+      "main_bottleneck": "存储 I/O 链路等待",
+      "key_metrics": {
+        "aas": 0.01,
+        "db_cpu_pct": 16.2,
+        "commit_pct": 3.6,
+        "user_io_pct": 11.5,
+        "parse_pct": 9.42
+      },
+      "top_sql_ids": [
+        "b6usrg82hwsa3",
+        "6mcpb06rctk0x",
+        "5zruc4v6y32f9",
+        "8szmwam7fysa3",
+        "6gvch1xu9ca3g"
+      ],
+      "llm_summary": "该数据库在长达约 7.5 天的快照周期内处于极度空闲状态（AAS=0.01，主机 CPU 空闲率 99.42%），规则引擎提示的“存储 I/O 链路等待”实为长周期快照下的假性告警。AWR 中 74.3% 的 System I/O 等待主要由 Oracle 后台维护任务（自动统计信息收集、空间/内存顾问、Job 调度）产生，其绝对等待时间仅约 77 分钟，分散在数天内，对业务毫无影响。由于快照跨度过长，后台作业的微小等待被时间轴稀释放大，掩盖了真实的低负载特征。\nTop SQL 几乎全部为 Oracle 内部维护作业（如 dbms_stats.gather_database_stats、dbms_space.auto_space_advisor、wri$_adv_objspace 插入等）。这些作业在空闲期集中执行，导致 db file sequential read 和 log file sync 占比偏高，属于数据库健康自检的正常表现。latch: shared pool 等待 47 秒主要源于内部作业频繁提交与解析，绝对值极小，无需干预。唯一值得关注的业务 SQL 为 86cu9",
+      "learned_pattern_ids": [
+        "低负载长周期快照下的维护任务假性瓶颈"
+      ],
+      "created_at": "2026-05-15T05:52:52.056987"
+    },
+    {
+      "id": "b691bbe2",
+      "db_name": "unknown",
+      "severity": "WARNING",
+      "main_bottleneck": "存储 I/O 链路等待",
+      "key_metrics": {
+        "aas": 0.01,
+        "db_cpu_pct": 16.2,
+        "commit_pct": 3.6,
+        "user_io_pct": 11.5,
+        "parse_pct": 9.42
+      },
+      "top_sql_ids": [
+        "b6usrg82hwsa3",
+        "6mcpb06rctk0x",
+        "5zruc4v6y32f9",
+        "8szmwam7fysa3",
+        "6gvch1xu9ca3g"
+      ],
+      "llm_summary": "本报告覆盖周期长达约7.5天（10739.85分钟），但整体负载极低（AAS=0.01，主机CPU空闲率99.42%），属于典型的空闲期数据库。规则引擎提示的“存储I/O链路等待”及System I/O占比高达74.3%，实为后台维护进程（DBWR、LGWR、MMON等）在空闲时段集中执行统计信息收集、空间顾问及内存顾问任务所产生的正常I/O活动，并非业务瓶颈或存储链路故障。DB Time的104.71分钟几乎全部被内部作业（dbms_stats、auto_space_advisor、内存评估等）占据，业务SQL占比微乎其微。latch: shared pool等待47秒与132万次解析相关，主要源于内部作业频繁解析或游标未缓存，但在当前极低并发下无实质性能风险。唯一值得关注的业务SQL（86cu9x1s20nhz）逻辑读偏高，热点表SPT.BCG_MSG访问集中，建议针对性优化执行计划与索引。整体而言，数据库健康度良好，无需紧急干预，重点应放在维护窗口规划与个别业务SQL的索引优化上。",
+      "learned_pattern_ids": [
+        "空闲期维护任务集中爆发",
+        "低并发下Shared Pool Latch虚高"
+      ],
+      "created_at": "2026-05-15T06:20:54.513420"
+    },
+    {
+      "id": "7bfc74e0",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "Redo/LGWR 写入链路异常",
+      "key_metrics": {
+        "aas": 8.18,
+        "db_cpu_pct": 16.0,
+        "commit_pct": 67.6,
+        "user_io_pct": 2.9,
+        "parse_pct": 2.22
+      },
+      "top_sql_ids": [
+        "gw0urwkskp7aj",
+        "9ap45q7mk35nz",
+        "04z72t646ksch",
+        "dfsku6vwgdwxh",
+        "cxnyubz9y1w9a"
+      ],
+      "llm_summary": "该时段数据库呈现典型的“高频小事务同步提交+底层存储写入延迟”特征。`log file sync` 占据 67.6% 的 DB Time，结合 281次/秒 的提交频率与约 543KB/s 的 Redo 产生量（单次事务 Redo 仅约 1.9KB），说明业务逻辑存在过度频繁的 Commit 行为。主机 CPU 空闲率高达 92.98%，彻底排除计算瓶颈，将矛头直指 Redo 日志的同步 I/O 延迟。同时，Top SQL 中大量 `SELECT SCN, SQL_REDO...` 语句及 `MN-LogMiner` 队列高达 162 万次等待，表明 CDC 同步或日志挖掘工具正在高频读取在线/归档日志，可能与 LGWR 进程在存储层产生 I/O 争用，进一步放大了写入链路的响应时间。\n\n应用层存在严重的逻辑 I/O 膨胀与游标共享不足问题。`0c5zzcp5g0jmq` 的 PL/SQL 任务仅执行 9 次却消耗近 355 亿 Buffer Gets，`6x87q5xhtu0uk` 单次执行消耗 6.8 万逻辑读，均指向缺失高效索引或存在低效的全表扫描/嵌套循环。解析次数 (2181",
+      "learned_pattern_ids": [
+        "高频小事务同步提交延迟模式",
+        "游标共享不足与解析过载模式",
+        "右倾索引块争用模式"
+      ],
+      "created_at": "2026-05-15T06:21:24.990665"
+    },
+    {
+      "id": "70769ad3",
+      "db_name": "unknown",
+      "severity": "HIGH",
+      "main_bottleneck": "Redo/LGWR 写入链路异常",
+      "key_metrics": {
+        "aas": 10.66,
+        "db_cpu_pct": 30.41,
+        "commit_pct": 64.8,
+        "user_io_pct": 3.7,
+        "parse_pct": 1.11
+      },
+      "top_sql_ids": [
+        "8vq3gds8afs7z",
+        "36404q1nms7m6",
+        "g9nwucg4d3jwa",
+        "50tnfdu7xh2qg",
+        "39t293x0ku46t"
+      ],
+      "llm_summary": "本时段核心瓶颈明确指向 Redo/LGWR 写入链路。log file sync 占据 64.8% 的 DB Time 且平均等待高达 381ms，叠加 log buffer space 平均等待近 6 秒，表明 LGWR 进程因底层存储 I/O 延迟过高而无法及时刷盘，导致前台进程在提交时严重阻塞。尽管主机 CPU 空闲率达 85.92%，但 DB CPU 仍占 30.4%，主要源于热点表（如 TMMHP21、TPSHPA2）的高逻辑读（42.2万次/秒）以及 Top SQL 的低效执行计划。此外，物化视图全量刷新（b9zmdm5w1s53x/8sarrmsspuamc）在业务时段产生大量物理读与重做日志，进一步加剧了 LGWR 压力与 log file switch completion 等待。解析计数（251万）与执行计数（363万）比例偏高，暗示应用存在大量字面量 SQL 或游标未复用，增加了 Shared Pool 竞争与 CPU 软解析开销。优化需优先解决 Redo 存储 I/O 瓶颈，调整提交策略，错峰调度 MV 刷新，并针对高频 SQL 补充索引与绑定变量改造。",
+      "learned_pattern_ids": [
+        "Redo I/O 瓶颈引发的 Commit 风暴",
+        "MV 全量刷新冲击 OLTP 链路",
+        "高解析率与游标未复用"
+      ],
+      "created_at": "2026-05-15T06:46:08.492808"
+    },
+    {
+      "id": "d4db61dc",
+      "db_name": "unknown",
+      "severity": "WARNING",
+      "main_bottleneck": "CPU",
+      "key_metrics": {
+        "aas": 16.91,
+        "db_cpu_pct": 49.35,
+        "commit_pct": 0.2,
+        "user_io_pct": 7.0,
+        "parse_pct": 1.68
+      },
+      "top_sql_ids": [
+        "c83wqa2f8f7y5",
+        "4rduy6bgwh17c",
+        "dajdu0db6mag7",
+        "0spxnjp5835ff",
+        "1bqfbnh1v0txc"
+      ],
+      "llm_summary": "本系统并非真正的CPU硬件瓶颈，而是典型的“逻辑读驱动型CPU消耗”。AAS仅为16.91，远低于64核主机容量，且Host Idle高达73.14%，证明OS层CPU资源充裕。49.3%的DB CPU消耗实质是海量逻辑读（117万块/秒）与低效执行计划导致的CPU空转。核心矛盾在于Top SQL存在严重的访问路径缺陷，尤其是SQL_ID 0spxnjp5835ff在1小时内产生物理读5.19亿次，单次执行近93万次物理读，表明大表（如INSURANCE.TRADEINFO_SUMPAY）存在全表扫描或索引失效。同时，log file switch (checkpoint incomplete) 等待占比3.5%且持续2162秒，结合Redo Size约1MB/sec的负载，可判定Redo日志文件过小或组数不足，导致频繁切换阻塞DBWR检查点，引发active checkpoint queue latch争用。此外，回滚率（3.53次/秒）占提交率（32.68次/秒）的10.8%，暗示应用层存在大量事务重试或约束冲突。整体为HIS/医保类混合负载，优化重心必须从“看CPU”转向“降逻辑",
+      "learned_pattern_ids": [
+        "逻辑读驱动型CPU消耗",
+        "检查点队列阻塞模式",
+        "高频配置表扫描风暴"
+      ],
+      "created_at": "2026-05-15T08:48:34.637212"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[
+  {
+    "summary": "test distillation",
+    "changes": {
+      "merged": 2
+    },
+    "timestamp": "2026-05-15T05:40:09.205396"
+  },
+  {
+    "summary": "test",
+    "changes": {
+      "merged": 2
+    },
+    "timestamp": "2026-05-15T05:40:33.973704"
+  },
+  {
+    "summary": "test",
+    "changes": {},
+    "timestamp": "2026-05-15T05:40:43.510128"
+  }
+]

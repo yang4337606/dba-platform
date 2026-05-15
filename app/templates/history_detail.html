@@ -1,0 +1,488 @@
+{% extends "base.html" %}
+
+{% block title %}历史记录详情{% endblock %}
+
+{% block content %}
+<main class="page-content result-content">
+    <div class="result-container">
+
+    {# ===== Top Bar ===== #}
+    <div class="top-bar">
+        <a href="{{ url_for('main.history') }}">&larr; 返回历史记录</a>
+        <div class="top-bar-right">
+            <span class="history-tag">历史记录</span>
+            {% if llm_result and not llm_result.get('error') %}
+            <span class="ai-badge">AI Enhanced</span>
+            {% endif %}
+            <form action="{{ url_for('main.export_markdown') }}" method="post" style="display:inline;">
+                <textarea name="markdown" hidden>{{ markdown }}</textarea>
+                <button type="submit">导出 Markdown</button>
+            </form>
+            <form action="{{ url_for('main.delete_history', record_id=record.id) }}" method="post" style="display:inline;" onsubmit="return confirm('确定删除此记录？')">
+                <button type="submit" class="btn btn-danger-sm">删除记录</button>
+            </form>
+        </div>
+    </div>
+
+    {# ===== Record Meta Info ===== #}
+    <div class="record-meta">
+        <div class="record-meta-row">
+            <span class="record-meta-item"><strong>文件：</strong>{{ record.filename }}</span>
+            <span class="record-meta-item"><strong>时间：</strong>{{ record.created_at }}</span>
+            {% if record.db_time %}<span class="record-meta-item"><strong>DB Time：</strong>{{ "%.2f"|format(record.db_time) }} min</span>{% endif %}
+            {% if record.aas %}<span class="record-meta-item"><strong>AAS：</strong>{{ "%.2f"|format(record.aas) }}</span>{% endif %}
+            {% if record.db_cpu_percent %}<span class="record-meta-item"><strong>DB CPU：</strong>{{ "%.1f"|format(record.db_cpu_percent) }}%</span>{% endif %}
+            {% if record.load_type %}<span class="record-meta-item"><strong>负载类型：</strong>{{ record.load_type }}</span>{% endif %}
+        </div>
+    </div>
+
+    {# ===== Summary ===== #}
+    {% if result %}
+    {% if result.get('main_bottleneck') or result.get('summary') %}
+    <div class="summary-card">
+        <div class="summary-top">
+            <span class="severity-badge severity-{{ result.get('severity', 'INFO') | lower }}">{{ result.get('severity', 'INFO') }}</span>
+            <span class="bottleneck-label">{{ result.get('main_bottleneck', '') }}</span>
+        </div>
+        <div class="summary-text">
+            {% for line in result.get('summary', '').splitlines() %}
+            {% if line.strip() %}<p>{{ line }}</p>{% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {# ===== Conclusions ===== #}
+    {% set conclusions = result.get('conclusions', []) %}
+    {% if conclusions %}
+    <section>
+        <h2>诊断结论</h2>
+        <div class="conclusion-grid">
+            {% for item in conclusions %}
+            <div class="conclusion-card">
+                <span class="conclusion-icon">&#9679;</span>
+                <p>{{ item }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Findings ===== #}
+    {% set findings = result.get('abnormal_findings', []) %}
+    {% if findings %}
+    <section>
+        <h2>异常发现</h2>
+        <div class="findings-list">
+            {% for finding in findings %}
+            <div class="finding-item severity-border-{{ finding.get('severity', 'info') | lower }}">
+                <div class="finding-header">
+                    <span class="severity-dot severity-{{ finding.get('severity', 'info') | lower }}"></span>
+                    <strong>{{ finding.get('name', '') }}</strong>
+                    {% if finding.get('value') %}<span class="finding-value">{{ finding.value }}</span>{% endif %}
+                </div>
+                {% if finding.get('description') %}<p class="finding-desc">{{ finding.description }}</p>{% endif %}
+                {% if finding.get('reason') %}<p class="finding-reason">{{ finding.reason }}</p>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Root Causes ===== #}
+    {% set root_causes = result.get('root_causes', []) %}
+    {% if root_causes %}
+    <section>
+        <h2>原因分析</h2>
+        <ol class="cause-list">
+            {% for cause in root_causes %}
+            <li>{{ cause }}</li>
+            {% endfor %}
+        </ol>
+    </section>
+    {% endif %}
+
+    {# ===== Propagation Chain ===== #}
+    {% set flows = result.get('root_cause_flows', []) %}
+    {% if flows %}
+    <section>
+        <h2>问题传播链</h2>
+        {% for flow in flows %}
+        <div class="flow-block">
+            <h3>{{ flow.get('title', '') }} <span class="flow-severity severity-{{ flow.get('severity', 'info') | lower }}">{{ flow.get('severity', '') }}</span></h3>
+            <p class="flow-path">
+                <span class="flow-node flow-root">{{ flow.get('root', '') }}</span>
+                {% for item in flow.get('amplifiers', []) %}
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-node flow-amp">{{ item }}</span>
+                {% endfor %}
+                {% for item in flow.get('symptoms', []) %}
+                <span class="flow-arrow">&rarr;</span>
+                <span class="flow-node flow-symptom">{{ item }}</span>
+                {% endfor %}
+            </p>
+            {% if flow.get('explanation') %}<p class="flow-explain">{{ flow.explanation }}</p>{% endif %}
+            {% if flow.get('evidence') %}
+            <ul class="flow-evidence">
+                {% for item in flow.evidence %}
+                <li><strong>{{ item.get('name', '') }}</strong>：{{ item.get('value', '') }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ===== Smart Recommendations ===== #}
+    {% if smart_recommendations %}
+    <section>
+        <h2>智能建议</h2>
+        <div class="rec-list">
+            {% for rec in smart_recommendations %}
+            <div class="rec-item {% if rec.priority == 'P1' %}rec-p1{% elif rec.priority == 'P9' %}rec-p9{% endif %} {% if rec.get('already_optimized') %}rec-done{% endif %}">
+                <span class="rec-priority">{{ rec.priority }}</span>
+                <div class="rec-body">
+                    <p class="rec-category"><strong>{{ rec.category }}</strong></p>
+                    <p class="rec-action">{{ rec.action }}</p>
+                    {% if rec.reason %}<p class="rec-reason">{{ rec.reason }}</p>{% endif %}
+                    {% if rec.get('already_optimized') %}<p class="rec-done-badge">已优化</p>{% endif %}
+                    {% if rec.get('historical') %}<p class="rec-historical-badge">历史经验</p>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Recommendations ===== #}
+    {% set recommendations = result.get('recommendations', []) %}
+    {% if recommendations %}
+    <section>
+        <h2>处理建议</h2>
+        <div class="rec-list">
+            {% for rec in recommendations %}
+            <div class="rec-item {% if rec.get('priority') == 'P1' %}rec-p1{% elif rec.get('priority') == 'P9' %}rec-p9{% endif %}">
+                <span class="rec-priority">{{ rec.get('priority', '') }}</span>
+                <div class="rec-body">
+                    <p class="rec-action">{{ rec.get('action', '') }}</p>
+                    {% if rec.get('reason') %}<p class="rec-reason">{{ rec.reason }}</p>{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+    {% endif %}
+
+    {# ===== AI Expert Analysis ===== #}
+    {% if llm_result and not llm_result.get('error') and llm_result.get('expert_analysis') %}
+    <section>
+        <h2>AI 专家分析 <span class="ai-tag">LLM</span></h2>
+        <div class="ai-analysis-card">
+            <div class="ai-analysis-text markdown-content">
+                {% for para in llm_result.expert_analysis.split('\n\n') %}
+                {% if para.strip() %}
+                <div class="analysis-paragraph">
+                    {% for line in para.split('\n') %}
+                    {% if line.strip() %}
+                    <p>{{ line }}</p>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+
+            {% if llm_result.get('key_findings') %}
+            <details class="ai-details" open>
+                <summary>关键发现 ({{ llm_result.key_findings | length }})</summary>
+                <div class="ai-findings">
+                    {% for f in llm_result.key_findings %}
+                    <div class="ai-finding-item">
+                        <span class="severity-dot severity-{{ f.get('severity', 'medium') }}"></span>
+                        <div>
+                            <strong>{{ f.get('title', '') }}</strong>
+                            <p>{{ f.get('detail', '') }}</p>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if llm_result.get('sql_recommendations') %}
+            <details class="ai-details">
+                <summary>SQL 优化建议 ({{ llm_result.sql_recommendations | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>SQL ID</th><th>问题</th><th>建议</th></tr></thead>
+                    <tbody>
+                    {% for rec in llm_result.sql_recommendations %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('sql_id', '') }}</code></td>
+                        <td>{{ rec.get('issue', '') }}</td>
+                        <td>{{ rec.get('recommendation', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+
+            {% if llm_result.get('parameter_suggestions') %}
+            <details class="ai-details">
+                <summary>参数调整建议 ({{ llm_result.parameter_suggestions | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>参数</th><th>当前问题</th><th>建议</th><th>原因</th></tr></thead>
+                    <tbody>
+                    {% for rec in llm_result.parameter_suggestions %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('parameter', '') }}</code></td>
+                        <td>{{ rec.get('current', '') }}</td>
+                        <td>{{ rec.get('recommended', '') }}</td>
+                        <td class="ev-desc">{{ rec.get('reason', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Similar Cases ===== #}
+    {% if similar_cases %}
+    <section>
+        <h2>相似历史案例 <span class="history-tag">RAG</span></h2>
+        <div class="similar-cases-card">
+            <p class="similar-intro">基于语义匹配，在历史记录中发现 {{ similar_cases|length }} 个相似问题：</p>
+            <div class="similar-cases-list">
+                {% for case in similar_cases %}
+                <div class="similar-case-item">
+                    <div class="case-header">
+                        <span class="case-date">{{ case.created_at }}</span>
+                        {% if case.get('similarity') %}
+                        <span class="similarity-badge">相似度: {{ "%.0f"|format(case.similarity * 100) }}%</span>
+                        {% endif %}
+                        <a href="{{ url_for('main.view_history', record_id=case.id) }}" class="case-link">查看详情 &rarr;</a>
+                    </div>
+                    <div class="case-body">
+                        <h4>{{ case.filename }}</h4>
+                        <p class="case-problem">问题：{{ case.main_problem }}</p>
+                        {% if case.get('diagnosis_summary') %}
+                        <p class="case-summary">{{ case.diagnosis_summary[:100] }}{% if case.diagnosis_summary|length > 100 %}...{% endif %}</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Evidence (Tab-based) ===== #}
+    {% if result and result.get('evidence') %}
+    <section>
+        <h2>关键证据</h2>
+        <div class="evidence-tabs">
+            <div class="tab-nav">
+                {% if result.evidence.get("DB Time 构成") or result.evidence.get("负载强度") or result.evidence.get("Load Profile") %}
+                <button class="tab-btn active" onclick="switchTab(event, 'tab-overview')">负载概况</button>
+                {% endif %}
+                {% if result.evidence.get("Top Events") %}
+                <button class="tab-btn {% if not result.evidence.get('DB Time 构成') and not result.evidence.get('负载强度') %}active{% endif %}" onclick="switchTab(event, 'tab-events')">Top Events</button>
+                {% endif %}
+                {% if result.evidence.get("Top SQL") or result.evidence.get("Top SQL 详情") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-sql')">Top SQL</button>
+                {% endif %}
+                {% if result.evidence.get("热点对象 (Segment Statistics)") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-segments')">热点对象</button>
+                {% endif %}
+            </div>
+
+            {% if result.evidence.get("DB Time 构成") or result.evidence.get("负载强度") or result.evidence.get("Load Profile") %}
+            <div id="tab-overview" class="tab-panel active">
+                {% if result.evidence.get("DB Time 构成") %}
+                <h3>DB Time 构成</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("DB Time 构成", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.get('name', '') }}</td>
+                        <td class="ev-value">{{ item.get('value', '') }}%</td>
+                        <td><div class="pct-bar" style="width: {{ ([item.get('value', 0), 100] | min) }}%"></div></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+
+                <h3>负载指标</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for group in ["负载强度", "Load Profile"] %}
+                    {% for item in result.evidence.get(group, []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.get('name', '') }}</td>
+                        <td class="ev-value">{{ item.get('value', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("Top Events") %}
+            <div id="tab-events" class="tab-panel {% if not result.evidence.get('DB Time 构成') and not result.evidence.get('负载强度') %}active{% endif %}">
+                <table class="evidence-table">
+                    <thead><tr><th>事件</th><th>等待时间</th><th>%DB Time</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("Top Events", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.get('name', '') }}</td>
+                        <td class="ev-value">{{ item.get('value', '') }}</td>
+                        <td class="ev-desc">{{ item.get('description', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("Top SQL") or result.evidence.get("Top SQL 详情") %}
+            <div id="tab-sql" class="tab-panel">
+                {% if result.evidence.get("Top SQL 详情") %}
+                <table class="evidence-table">
+                    <thead><tr><th>SQL ID</th><th>详情</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("Top SQL 详情", []) %}
+                    <tr>
+                        <td class="ev-name"><code>{{ item.get('name', '') }}</code></td>
+                        <td class="ev-value" style="white-space: pre-wrap; word-break: break-all;">{{ item.get('value', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("Top SQL", []) %}
+                    <tr>
+                        <td class="ev-name"><code>{{ item.get('name', '') }}</code></td>
+                        <td class="ev-value">{{ item.get('value', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("热点对象 (Segment Statistics)") %}
+            <div id="tab-segments" class="tab-panel">
+                <table class="evidence-table">
+                    <thead><tr><th>对象</th><th>占比</th><th>说明</th></tr></thead>
+                    <tbody>
+                    {% for item in result.evidence.get("热点对象 (Segment Statistics)", []) %}
+                    <tr>
+                        <td class="ev-name">{{ item.get('name', '') }}</td>
+                        <td class="ev-value">{{ item.get('value', '') }}</td>
+                        <td class="ev-desc">{{ item.get('description', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Diagnostic Details (collapsed) ===== #}
+    {% if result and result.get('evidence') and result.evidence.get("诊断明细 - 问题域") %}
+    <details class="diagnosis-details">
+        <summary>诊断明细</summary>
+        {% for group_name in ["诊断明细 - 问题域", "诊断明细 - 事件语义", "诊断明细 - Top SQL 行为"] %}
+        {% if result.evidence.get(group_name) %}
+        <h3>{{ group_name.replace("诊断明细 - ", "") }}</h3>
+        <table class="evidence-table">
+            <tbody>
+            {% for item in result.evidence.get(group_name, []) %}
+            <tr>
+                <td class="ev-name">{{ item.get('name', '') }}</td>
+                <td class="ev-value">{{ item.get('value', '') }}</td>
+                {% if item.get('description') %}<td class="ev-desc">{{ item.description }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% endfor %}
+    </details>
+    {% endif %}
+
+    </div>
+</main>
+
+<style>
+.record-meta {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    margin-bottom: 8px;
+}
+
+.record-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+}
+
+.record-meta-item {
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.record-meta-item strong {
+    color: var(--text);
+}
+
+.btn-danger-sm {
+    min-height: 38px;
+    padding: 8px 16px;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 8px;
+    background: var(--danger-soft);
+    color: #f87171;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-danger-sm:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: var(--danger);
+}
+
+@media (max-width: 720px) {
+    .record-meta-row {
+        flex-direction: column;
+        gap: 6px;
+    }
+}
+</style>
+
+<script>
+function switchTab(event, tabId) {
+    const container = event.target.closest('.evidence-tabs');
+    container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    container.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+}
+</script>
+{% endblock %}

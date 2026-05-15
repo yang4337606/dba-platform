@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}分析进行中{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <div class="result-container">
+        <div class="task-progress-card">
+            <div class="progress-header">
+                <h1>🔄 分析进行中</h1>
+                <p class="task-name">{{ task.name }}</p>
+            </div>
+
+            <div class="progress-status">
+                <div class="status-badge status-{{ task.status }}">
+                    {% if task.status == 'pending' %}
+                    ⏳ 等待中
+                    {% elif task.status == 'running' %}
+                    🔄 分析中
+                    {% elif task.status == 'completed' %}
+                    ✅ 已完成
+                    {% elif task.status == 'failed' %}
+                    ❌ 失败
+                    {% endif %}
+                </div>
+
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-bar" style="width: {{ task.progress }}%"></div>
+                </div>
+                <div class="progress-text" id="progress-text">{{ task.progress }}%</div>
+            </div>
+
+            <div class="task-info">
+                <div class="info-row">
+                    <span class="info-label">任务ID</span>
+                    <span class="info-value"><code>{{ task.task_id }}</code></span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">创建时间</span>
+                    <span class="info-value">{{ task.created_at }}</span>
+                </div>
+                {% if task.started_at %}
+                <div class="info-row">
+                    <span class="info-label">开始时间</span>
+                    <span class="info-value">{{ task.started_at }}</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="task-notice">
+                <p>💡 <strong>提示：</strong>即使关闭此页面，分析也会在后台继续进行</p>
+                <p>📋 完成后可在 <a href="{{ url_for('main.history') }}">历史记录</a> 中查看结果</p>
+            </div>
+
+            <div class="task-actions">
+                <a href="{{ url_for('main.history') }}" class="btn btn-secondary">返回历史记录</a>
+                <button class="btn btn-primary" onclick="checkStatus()">刷新状态</button>
+            </div>
+        </div>
+    </div>
+</main>
+
+<style>
+.task-progress-card {
+    max-width: 700px;
+    margin: 3rem auto;
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 3rem;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.progress-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.progress-header h1 {
+    margin: 0 0 0.5rem 0;
+    font-size: 2rem;
+    color: var(--text);
+}
+
+.task-name {
+    color: var(--muted);
+    font-size: 1.125rem;
+}
+
+.progress-status {
+    margin: 2rem 0;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+}
+
+.status-badge.status-pending {
+    background: rgba(156, 163, 175, 0.2);
+    color: #9ca3af;
+}
+
+.status-badge.status-running {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--primary);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.status-badge.status-completed {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.status-badge.status-failed {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--danger);
+}
+
+.progress-bar-container {
+    width: 100%;
+    height: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), #60a5fa);
+    border-radius: 6px;
+    transition: width 0.5s ease;
+}
+
+.progress-text {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.task-info {
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.info-value {
+    color: var(--text);
+}
+
+.task-notice {
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 4px solid var(--primary);
+    border-radius: 8px;
+}
+
+.task-notice p {
+    margin: 0.5rem 0;
+    color: var(--text);
+}
+
+.task-notice a {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+.task-actions {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 2rem;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+</style>
+
+<script>
+const taskId = "{{ task.task_id }}";
+let checkInterval;
+
+function checkStatus() {
+    fetch(`/async/task/${taskId}`)
+        .then(res => res.json())
+        .then(data => {
+            // 更新进度条
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            progressBar.style.width = data.progress + '%';
+            progressText.textContent = data.progress + '%';
+
+            // 如果完成，跳转到结果页
+            if (data.status === 'completed') {
+                clearInterval(checkInterval);
+                window.location.href = `/async/result/${taskId}`;
+            } else if (data.status === 'failed') {
+                clearInterval(checkInterval);
+                alert('分析失败: ' + data.error);
+                window.location.href = "{{ url_for('main.index') }}";
+            }
+        })
+        .catch(err => {
+            console.error('Failed to check status:', err);
+        });
+}
+
+// 自动轮询状态（每3秒）
+checkInterval = setInterval(checkStatus, 3000);
+
+// 页面加载时立即检查一次
+checkStatus();
+</script>
+{% endblock %}

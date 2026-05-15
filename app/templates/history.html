@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block title %}历史记录{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <section class="workspace-section">
+        <div class="section-heading">
+            <h2>历史分析记录</h2>
+            <p>查看所有已分析的 AWR 报告记录</p>
+        </div>
+
+        {% if history and history|length >= 2 %}
+        <div style="margin-bottom: 1.5rem;">
+            <a href="{{ url_for('main.compare_select') }}" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 0.5rem;">
+                    <polyline points="16 3 21 3 21 8"></polyline>
+                    <line x1="4" y1="20" x2="21" y2="3"></line>
+                    <polyline points="21 16 21 21 16 21"></polyline>
+                    <line x1="15" y1="15" x2="21" y2="21"></line>
+                    <line x1="4" y1="4" x2="9" y2="9"></line>
+                </svg>
+                对比分析
+            </a>
+        </div>
+        {% endif %}
+
+        {% if history %}
+        <div class="history-table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>分析时间</th>
+                        <th>文件名</th>
+                        <th>分析类型</th>
+                        <th>主要问题</th>
+                        <th>DB Time</th>
+                        <th>AAS</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for record in history %}
+                    <tr>
+                        <td>{{ record.created_at }}</td>
+                        <td>{{ record.filename }}</td>
+                        <td><span class="badge">{{ record.analyzer_type }}</span></td>
+                        <td>{{ record.main_problem or '-' }}</td>
+                        <td>{{ ("%.2f"|format(record.db_time) + " min") if record.db_time else '-' }}</td>
+                        <td>{{ ("%.2f"|format(record.aas)) if record.aas else '-' }}</td>
+                        <td>
+                            <a href="{{ url_for('main.view_history', record_id=record.id) }}" class="btn-link">查看</a>
+                            <form action="{{ url_for('main.delete_history', record_id=record.id) }}" method="post" style="display:inline;" onsubmit="return confirm('确定删除此记录？')">
+                                <button type="submit" class="btn-link danger" style="background:none;border:none;cursor:pointer;padding:0;">删除</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity: 0.3; margin-bottom: 1rem;">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            <h3>暂无历史记录</h3>
+            <p>上传并分析 AWR 报告后，记录将显示在这里</p>
+            <a href="{{ url_for('main.index') }}" class="btn btn-primary" style="margin-top: 1rem;">开始分析</a>
+        </div>
+        {% endif %}
+    </section>
+</main>
+
+<style>
+.history-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--card-bg);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table thead {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.data-table th {
+    padding: 1rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 2px solid var(--border);
+}
+
+.data-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.data-table tbody tr {
+    transition: background 0.2s;
+}
+
+.data-table tbody tr:hover {
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--primary);
+    border-radius: 12px;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.btn-link {
+    color: var(--primary);
+    text-decoration: none;
+    margin-right: 1rem;
+    font-weight: 500;
+    transition: color 0.2s;
+}
+
+.btn-link:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+}
+
+.btn-link.danger {
+    color: var(--danger);
+}
+
+.btn-link.danger:hover {
+    color: #dc2626;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--muted);
+}
+
+.empty-state h3 {
+    color: var(--text);
+    margin-bottom: 0.5rem;
+}
+
+.btn {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    border: none;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+</style>
+{% endblock %}

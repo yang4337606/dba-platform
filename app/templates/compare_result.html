@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+
+{% block title %}对比结果{% endblock %}
+
+{% block content %}
+<main class="page-content">
+    <div class="result-container">
+
+    {# ===== Top Bar ===== #}
+    <div class="top-bar">
+        <a href="{{ url_for('main.compare_select') }}">&larr; 重新选择</a>
+        <div class="top-bar-right">
+            <a href="{{ url_for('main.history') }}" class="btn-link">返回历史记录</a>
+        </div>
+    </div>
+
+    {# ===== Header ===== #}
+    <h1>性能对比分析</h1>
+
+    {# ===== Overall Trend ===== #}
+    {% if comparison.trend.overall %}
+    <div class="trend-card trend-{{ comparison.trend.overall }}">
+        <div class="trend-icon">
+            {% if comparison.trend.overall == 'better' %}
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                <polyline points="17 6 23 6 23 12"></polyline>
+            </svg>
+            {% elif comparison.trend.overall == 'worse' %}
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 18 13.5 8.5 8.5 13.5 1 6"></polyline>
+                <polyline points="17 18 23 18 23 12"></polyline>
+            </svg>
+            {% else %}
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            {% endif %}
+        </div>
+        <div class="trend-content">
+            <h2>{{ comparison.trend.message }}</h2>
+            <p>基于 DB Time 变化的整体评估</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ===== Record Info ===== #}
+    <div class="compare-info-grid">
+        <div class="compare-info-card">
+            <h3>基准记录（旧）</h3>
+            <div class="info-row">
+                <span class="info-label">时间</span>
+                <span class="info-value">{{ record1.created_at }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">文件</span>
+                <span class="info-value">{{ record1.filename }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">问题</span>
+                <span class="info-value">{{ record1.main_problem or '-' }}</span>
+            </div>
+        </div>
+
+        <div class="compare-info-card">
+            <h3>对比记录（新）</h3>
+            <div class="info-row">
+                <span class="info-label">时间</span>
+                <span class="info-value">{{ record2.created_at }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">文件</span>
+                <span class="info-value">{{ record2.filename }}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">问题</span>
+                <span class="info-value">{{ record2.main_problem or '-' }}</span>
+            </div>
+        </div>
+    </div>
+
+    {# ===== Metrics Comparison ===== #}
+    <section>
+        <h2>关键指标对比</h2>
+        <div class="metrics-compare-table">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        <th>指标</th>
+                        <th>基准值（旧）</th>
+                        <th>对比值（新）</th>
+                        <th>变化</th>
+                        <th>趋势</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for metric_name, metric_data in comparison.metrics_diff.items() %}
+                    <tr>
+                        <td class="metric-name">
+                            {% if metric_name == 'db_time' %}DB Time (min)
+                            {% elif metric_name == 'elapsed_time' %}Elapsed Time (min)
+                            {% elif metric_name == 'aas' %}AAS
+                            {% elif metric_name == 'db_cpu_percent' %}DB CPU (%)
+                            {% else %}{{ metric_name }}
+                            {% endif %}
+                        </td>
+                        <td class="metric-value">{{ "%.2f"|format(metric_data.old) }}</td>
+                        <td class="metric-value">{{ "%.2f"|format(metric_data.new) }}</td>
+                        <td class="metric-diff">
+                            <span class="diff-badge diff-{{ metric_data.trend }}">
+                                {{ "%+.2f"|format(metric_data.diff) }}
+                                ({{ "%+.1f"|format(metric_data.pct_change) }}%)
+                            </span>
+                        </td>
+                        <td class="metric-trend">
+                            {% if metric_data.trend == 'up' %}
+                            <span class="trend-badge trend-up">↑</span>
+                            {% elif metric_data.trend == 'down' %}
+                            <span class="trend-badge trend-down">↓</span>
+                            {% else %}
+                            <span class="trend-badge trend-stable">→</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {# ===== Top Events Comparison ===== #}
+    {% if comparison.top_events_diff %}
+    <section>
+        <h2>Top Events 变化</h2>
+        <div class="events-compare-table">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        <th>等待事件</th>
+                        <th>基准值（旧）</th>
+                        <th>对比值（新）</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in comparison.top_events_diff %}
+                    <tr class="event-row-{{ event.status }}">
+                        <td class="event-name">{{ event.name }}</td>
+                        <td class="event-value">{{ event.old_value }}</td>
+                        <td class="event-value">{{ event.new_value }}</td>
+                        <td class="event-status">
+                            {% if event.status == 'new' %}
+                            <span class="status-badge status-new">新增</span>
+                            {% elif event.status == 'removed' %}
+                            <span class="status-badge status-removed">消失</span>
+                            {% else %}
+                            <span class="status-badge status-changed">变化</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Top SQL Comparison ===== #}
+    {% if comparison.top_sql_diff %}
+    <section>
+        <h2>Top SQL 变化</h2>
+        <div class="sql-compare-table">
+            <table class="compare-table">
+                <thead>
+                    <tr>
+                        <th>SQL ID</th>
+                        <th>基准值（旧）</th>
+                        <th>对比值（新）</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sql in comparison.top_sql_diff %}
+                    <tr class="sql-row-{{ sql.status }}">
+                        <td class="sql-id"><code>{{ sql.sql_id }}</code></td>
+                        <td class="sql-value">{{ sql.old_value }}</td>
+                        <td class="sql-value">{{ sql.new_value }}</td>
+                        <td class="sql-status">
+                            {% if sql.status == 'new' %}
+                            <span class="status-badge status-new">新增</span>
+                            {% elif sql.status == 'removed' %}
+                            <span class="status-badge status-removed">消失</span>
+                            {% else %}
+                            <span class="status-badge status-changed">变化</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+
+    {# ===== Quick Actions ===== #}
+    <section>
+        <h2>快速操作</h2>
+        <div class="quick-actions">
+            <a href="{{ url_for('main.view_history', record_id=record1.id) }}" class="action-card">
+                <h3>查看基准记录详情</h3>
+                <p>{{ record1.filename }}</p>
+            </a>
+            <a href="{{ url_for('main.view_history', record_id=record2.id) }}" class="action-card">
+                <h3>查看对比记录详情</h3>
+                <p>{{ record2.filename }}</p>
+            </a>
+        </div>
+    </section>
+
+    </div>
+</main>
+
+<style>
+.trend-card {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-md);
+}
+
+.trend-card.trend-better {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05));
+    border-left: 4px solid #22c55e;
+}
+
+.trend-card.trend-worse {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.05));
+    border-left: 4px solid #ef4444;
+}
+
+.trend-card.trend-stable {
+    background: linear-gradient(135deg, rgba(156, 163, 175, 0.1), rgba(156, 163, 175, 0.05));
+    border-left: 4px solid #9ca3af;
+}
+
+.trend-icon {
+    flex-shrink: 0;
+}
+
+.trend-card.trend-better .trend-icon {
+    color: #22c55e;
+}
+
+.trend-card.trend-worse .trend-icon {
+    color: #ef4444;
+}
+
+.trend-card.trend-stable .trend-icon {
+    color: #9ca3af;
+}
+
+.trend-content h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.25rem;
+    color: var(--text);
+}
+
+.trend-content p {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.compare-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.compare-info-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: var(--shadow-md);
+}
+
+.compare-info-card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--border);
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+}
+
+.info-label {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.info-value {
+    color: var(--text);
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card-bg);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+}
+
+.compare-table thead {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.compare-table th {
+    padding: 1rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 2px solid var(--border);
+}
+
+.compare-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.compare-table tbody tr:hover {
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.metric-name {
+    font-weight: 600;
+}
+
+.metric-value {
+    font-family: 'Courier New', monospace;
+}
+
+.diff-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+}
+
+.diff-badge.diff-up {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.diff-badge.diff-down {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.diff-badge.diff-stable {
+    background: rgba(156, 163, 175, 0.2);
+    color: #9ca3af;
+}
+
+.trend-badge {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 1.25rem;
+    font-weight: bold;
+}
+
+.trend-badge.trend-up {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.trend-badge.trend-down {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.trend-badge.trend-stable {
+    background: rgba(156, 163, 175, 0.2);
+    color: #9ca3af;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.status-badge.status-new {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--primary);
+}
+
+.status-badge.status-removed {
+    background: rgba(156, 163, 175, 0.2);
+    color: #9ca3af;
+}
+
+.status-badge.status-changed {
+    background: rgba(251, 191, 36, 0.2);
+    color: #f59e0b;
+}
+
+.event-row-new, .sql-row-new {
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.event-row-removed, .sql-row-removed {
+    background: rgba(156, 163, 175, 0.05);
+    opacity: 0.7;
+}
+
+.quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+}
+
+.action-card {
+    background: var(--card-bg);
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: var(--shadow-md);
+    text-decoration: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.action-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+.action-card h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--primary);
+    margin-bottom: 0.5rem;
+}
+
+.action-card p {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+    .compare-info-grid,
+    .quick-actions {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+{% endblock %}

@@ -8,3 +8,8 @@ venv/
 .vscode/
 .idea/
 uploads/
+.claude/
+.pytest_cache/
+data/
+temp/
+knowledge/backups/

@@ -1,72 +1,70 @@
-<!DOCTYPE html>
-<html lang="{{ get_lang() }}">
+<!doctype html>
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}{{ _('site_title') }}{% endblock %}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  {% block head %}{% endblock %}
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}数据库智能诊断平台{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  {% if current_user.is_authenticated %}
-  <nav class="sidebar">
-    <div class="sidebar-header">
-      <div class="logo">
-        <span class="logo-icon">&#9671;</span>
-        <span class="logo-text">{{ _('login_brand') }}</span>
-      </div>
-    </div>
-    <div class="sidebar-nav">
-      <a href="{{ url_for('main.dashboard') }}" class="nav-item {% if request.endpoint == 'main.dashboard' %}active{% endif %}">
-        <span class="nav-icon">&#9632;</span> {{ _('nav_dashboard') }}
-      </a>
-      <a href="{{ url_for('awr.list_reports') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('awr.') %}active{% endif %}">
-        <span class="nav-icon">&#9670;</span> {{ _('nav_awr_analysis') }}
-      </a>
-      <a href="{{ url_for('knowledge.list_entries') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('knowledge.') %}active{% endif %}">
-        <span class="nav-icon">&#9733;</span> {{ _('nav_knowledge') }}
-      </a>
-      <a href="{{ url_for('projects.list_projects') }}" class="nav-item {% if request.endpoint == 'projects.list_projects' %}active{% endif %}">
-        <span class="nav-icon">&#9783;</span> {{ _('nav_projects') }}
-      </a>
-      {% if current_user.is_admin %}
-      <div class="nav-divider"></div>
-      <a href="{{ url_for('admin.index') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('admin.') %}active{% endif %}">
-        <span class="nav-icon">&#9881;</span> {{ _('nav_admin') }}
-      </a>
-      {% endif %}
-    </div>
-    <div class="sidebar-footer">
-      <div class="user-info">
-        <span class="user-badge {{ current_user.role }}">{{ current_user.role }}</span>
-        <span class="user-name">{{ current_user.username }}</span>
-      </div>
-      <div class="lang-switch">
-        <a href="/set-lang/zh" class="{% if get_lang() == 'zh' %}active{% endif %}">中文</a>
-        <a href="/set-lang/en" class="{% if get_lang() == 'en' %}active{% endif %}">EN</a>
-      </div>
-      <a href="{{ url_for('auth.logout') }}" class="nav-item logout">{{ _('nav_logout') }}</a>
-    </div>
-  </nav>
-  {% endif %}
+<body class="app-layout">
+    <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="document.querySelector('.sidebar').classList.toggle('open')">
+        <span></span><span></span><span></span>
+    </button>
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+            <span class="brand-mark">DB</span>
+            <span class="brand-text">DBA Diagnosis</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="{{ url_for('main.index') }}" class="nav-item {% if request.endpoint == 'main.index' %}active{% endif %}">
+                <span class="nav-icon">&#128202;</span>
+                <span>Oracle AWR</span>
+            </a>
+            <a href="{{ url_for('main.history') }}" class="nav-item {% if request.endpoint in ('main.history', 'main.view_history', 'main.compare_select', 'main.compare_result') %}active{% endif %}">
+                <span class="nav-icon">&#128221;</span>
+                <span>历史记录</span>
+            </a>
+            <a href="{{ url_for('main.trends') }}" class="nav-item {% if request.endpoint == 'main.trends' %}active{% endif %}">
+                <span class="nav-icon">&#128200;</span>
+                <span>趋势分析</span>
+            </a>
 
-  <main class="{% if current_user.is_authenticated %}main-content{% else %}main-full{% endif %}">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-      <div class="flash-container">
-        {% for category, message in messages %}
-        <div class="flash flash-{{ category }}">{{ message }}</div>
-        {% endfor %}
-      </div>
-      {% endif %}
-    {% endwith %}
-
-    {% block content %}{% endblock %}
-  </main>
-
-  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-  {% block scripts %}{% endblock %}
+            {# 系统设置 — 带子菜单 #}
+            {% set settings_active = request.endpoint in ('main.settings', 'main.settings_knowledge', 'main.settings_io') or request.endpoint == 'main.export_knowledge' %}
+            <div class="nav-group {% if settings_active %}open{% endif %}">
+                <a href="{{ url_for('main.settings') }}" class="nav-item {% if settings_active %}active{% endif %}" onclick="this.closest('.nav-group').classList.toggle('open')">
+                    <span class="nav-icon">&#9881;</span>
+                    <span>系统设置</span>
+                    <span class="nav-arrow">&#9662;</span>
+                </a>
+                <div class="nav-children">
+                    <a href="{{ url_for('main.settings') }}" class="nav-sub-item {% if request.endpoint == 'main.settings' %}active{% endif %}">
+                        <span>LLM 配置</span>
+                    </a>
+                    <a href="{{ url_for('main.settings_knowledge') }}" class="nav-sub-item {% if request.endpoint == 'main.settings_knowledge' %}active{% endif %}">
+                        <span>知识管理</span>
+                    </a>
+                    <a href="{{ url_for('main.settings_io') }}" class="nav-sub-item {% if request.endpoint in ('main.settings_io', 'main.export_knowledge') %}active{% endif %}">
+                        <span>导出 / 导入</span>
+                    </a>
+                </div>
+            </div>
+        </nav>
+        <div class="sidebar-footer">
+            <span class="sidebar-version">v1.0</span>
+        </div>
+    </aside>
+    <div class="main-wrapper">
+        {% block content %}{% endblock %}
+    </div>
+    <script>
+    document.addEventListener('click', function(e) {
+        const sidebar = document.getElementById('sidebar');
+        const btn = document.getElementById('mobile-menu-btn');
+        if (sidebar && sidebar.classList.contains('open') && !sidebar.contains(e.target) && !btn.contains(e.target)) {
+            sidebar.classList.remove('open');
+        }
+    });
+    </script>
 </body>
 </html>

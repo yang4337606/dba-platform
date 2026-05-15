@@ -1,0 +1,311 @@
+- id: cpu_db_time_high
+  category: CPU
+  severity: HIGH
+  metric: db_cpu_pct_db_time
+  condition:
+    metric: db_cpu_pct_db_time
+    op: ">="
+    value: 70
+  finding: DB CPU 占 DB Time 过高
+  description: CPU 消耗是当前 DB Time 的主要组成部分。
+  reason: DB CPU 占比过高，说明数据库主要时间消耗在 SQL 执行计算、逻辑读或执行计划效率问题上。
+  recommendation: 优先分析 CPU Time 和 Buffer Gets 较高的 Top SQL。
+
+- id: cpu_db_time_warning
+  category: CPU
+  severity: WARNING
+  metric: db_cpu_pct_db_time
+  condition:
+    metric: db_cpu_pct_db_time
+    op: ">="
+    value: 40
+  finding: DB CPU 占比较高
+  description: SQL 执行计算、逻辑读或执行计划效率是主要压力来源。
+  reason: DB CPU 占 DB Time 接近一半，说明 SQL 执行计算、逻辑读或执行计划效率需要重点排查。
+  recommendation: 检查 Top SQL 的 CPU Time、Buffer Gets 和 Executions。
+
+- id: checkpoint_incomplete
+  category: Redo
+  severity: WARNING
+  metric: log_file_switch_checkpoint_incomplete_pct_db_time
+  condition:
+    metric: log_file_switch_checkpoint_incomplete_pct_db_time
+    op: ">="
+    value: 1
+  finding: log file switch checkpoint incomplete 等待异常
+  description: 日志切换时 checkpoint 尚未完成，已经进入 Top Events。
+  reason: 通常表示 redo log 切换过快、redo 日志组偏小、checkpoint 写出跟不上、DBWR 或存储写能力不足。
+  recommendation: 检查 redo log 大小、日志切换频率、checkpoint 参数、DBWR 和存储写入能力。
+
+- id: logical_reads_high
+  category: SQL
+  severity: WARNING
+  metric: logical_read_blocks_per_sec
+  condition:
+    metric: logical_read_blocks_per_sec
+    op: ">="
+    value: 100000
+  finding: 逻辑读非常高
+  description: 数据库存在大量 Buffer Gets。
+  reason: 优先怀疑高频 SQL、执行计划不优、索引选择性差或大范围扫描。
+  recommendation: 分析 SQL ordered by Gets、SQL ordered by CPU Time 和执行计划。
+
+- id: physical_reads_high
+  category: I/O
+  severity: WARNING
+  metric: physical_read_blocks_per_sec
+  condition:
+    metric: physical_read_blocks_per_sec
+    op: ">="
+    value: 50000
+  finding: 物理读偏高
+  description: 数据库存在较大的读 I/O 压力。
+  reason: 可能存在大查询、批处理、全表扫描、直接路径读或索引访问路径不合理。
+  recommendation: 检查 SQL ordered by Reads、direct path read 和 db file sequential read 相关 SQL。
+
+- id: user_io_high
+  category: I/O
+  severity: HIGH
+  metric: user_io_pct_db_time
+  condition:
+    metric: user_io_pct_db_time
+    op: ">="
+    value: 30
+  finding: User I/O 等待占比过高
+  description: 数据库存在明显 I/O 等待。
+  reason: 可能存在大量物理读、全表扫描、索引缺失或存储响应慢。
+  recommendation: 分析 Physical Reads 较高的 SQL 和相关对象。
+
+- id: user_io_warning
+  category: I/O
+  severity: WARNING
+  metric: user_io_pct_db_time
+  condition:
+    metric: user_io_pct_db_time
+    op: ">="
+    value: 15
+  finding: User I/O 等待偏高
+  description: 存在一定 I/O 等待。
+  reason: 可能有部分 SQL 产生较多物理读。
+  recommendation: 检查 SQL ordered by Reads。
+
+- id: commit_high
+  category: Commit
+  severity: HIGH
+  metric: commit_pct_db_time
+  condition:
+    metric: commit_pct_db_time
+    op: ">="
+    value: 20
+  finding: Commit 等待占比过高
+  description: 事务提交等待明显。
+  reason: 可能存在频繁提交、redo 写入慢或 log file sync 等待较高。
+  recommendation: 检查 redo 日志写入性能和应用提交频率。
+
+- id: commit_warning
+  category: Commit
+  severity: WARNING
+  metric: commit_pct_db_time
+  condition:
+    metric: commit_pct_db_time
+    op: ">="
+    value: 10
+  finding: Commit 等待偏高
+  description: Commit 等待需要关注。
+  reason: 可能存在提交频率偏高或 redo 写入延迟。
+  recommendation: 检查 log file sync 和 log file parallel write。
+
+- id: parse_high
+  category: Parse
+  severity: WARNING
+  metric: parse_time_pct_db_time
+  condition:
+    metric: parse_time_pct_db_time
+    op: ">="
+    value: 10
+  finding: SQL Parse 时间偏高
+  description: SQL 解析消耗较明显。
+  reason: 可能存在硬解析过多、绑定变量不足或游标共享问题。
+  recommendation: 检查 Parse Calls、Hard Parses 和 SQL 绑定变量使用情况。
+
+- id: memory_pressure
+  category: Memory
+  severity: WARNING
+  metric: memory_pressure
+  condition:
+    metric: memory_pressure
+    op: ">="
+    value: 1
+  finding: 可能存在内存压力
+  description: Memory Statistics 中出现内存压力相关信号。
+  reason: 可能存在 PGA/SGA 配置不足、内存抖动或工作区溢出风险。
+  recommendation: 检查 PGA/SGA 使用、排序/Hash 工作区和内存 Advisory。
+
+- id: temp_space_pressure
+  category: TEMP
+  severity: HIGH
+  metric: temp_pct_db_time
+  condition:
+    metric: temp_pct_db_time
+    op: ">="
+    value: 10
+  finding: TEMP 表空间等待占比过高
+  description: 排序或哈希操作溢出到磁盘，产生大量 direct path read/write temp 等待。
+  reason: PGA_AGGREGATE_TARGET 不足或存在超大排序/哈希操作。
+  recommendation: 增大 PGA 配置；检查 Top SQL 是否有大表排序、笛卡尔积或缺少 WHERE 条件。
+
+- id: temp_space_warning
+  category: TEMP
+  severity: WARNING
+  metric: temp_pct_db_time
+  condition:
+    metric: temp_pct_db_time
+    op: ">="
+    value: 3
+  finding: TEMP 等待偏高
+  description: 存在部分排序/哈希溢出到磁盘。
+  reason: 可能有 SQL 产生大量临时数据。
+  recommendation: 检查 SQL ordered by Temp Usage；考虑优化排序操作或增大 PGA。
+
+- id: latch_contention_high
+  category: Concurrency
+  severity: HIGH
+  metric: latch_pct_db_time
+  condition:
+    metric: latch_pct_db_time
+    op: ">="
+    value: 10
+  finding: Latch 争用严重
+  description: Latch 等待占 DB Time 比例过高，存在内部结构竞争。
+  reason: 可能存在热块争用（cache buffers chains）、共享池争用（shared pool latch）或 redo 分配争用。
+  recommendation: 检查 Top Latch；热块问题考虑 hash 分区或反向索引；共享池争用检查硬解析。
+
+- id: latch_contention_warning
+  category: Concurrency
+  severity: WARNING
+  metric: latch_pct_db_time
+  condition:
+    metric: latch_pct_db_time
+    op: ">="
+    value: 3
+  finding: 存在 Latch 争用
+  description: 有一定 Latch 等待，需关注。
+  reason: 可能有并发访问热点。
+  recommendation: 检查 V$LATCH 的 Miss% 和 Wait Time。
+
+- id: rac_gc_high
+  category: RAC
+  severity: HIGH
+  metric: gc_pct_db_time
+  condition:
+    metric: gc_pct_db_time
+    op: ">="
+    value: 15
+  finding: RAC 全局缓存等待过高
+  description: 跨实例数据块传输（Global Cache）占 DB Time 比例过高。
+  reason: 实例间数据访问频繁、Interconnect 带宽/延迟不足、数据局部性差。
+  recommendation: 检查 Interconnect 延迟（V$CLUSTER_INTERCONNECTS）；使用 Service 绑定减少跨实例访问；检查 sequence cache 大小。
+
+- id: rac_gc_warning
+  category: RAC
+  severity: WARNING
+  metric: gc_pct_db_time
+  condition:
+    metric: gc_pct_db_time
+    op: ">="
+    value: 5
+  finding: RAC 全局缓存等待偏高
+  description: 存在一定跨实例数据块传输开销。
+  reason: 可能有跨实例查询或热块跨节点争用。
+  recommendation: 检查 Top Events 中的 gc 相关事件分布。
+
+- id: network_wait_high
+  category: Network
+  severity: WARNING
+  metric: net_pct_db_time
+  condition:
+    metric: net_pct_db_time
+    op: ">="
+    value: 8
+  finding: 网络等待偏高
+  description: SQL*Net 相关等待占 DB Time 比例偏高。
+  reason: 可能存在网络延迟、客户端处理慢（fetch 太少行）或 dblink 查询慢。
+  recommendation: 检查 SQL*Net message 类事件；优化批量 fetch 大小（arraysize）；检查 dblink 目标库性能。
+
+- id: hard_parse_high
+  category: Parse
+  severity: HIGH
+  metric: hard_parses_per_sec
+  condition:
+    metric: hard_parses_per_sec
+    op: ">="
+    value: 200
+  finding: 硬解析极高
+  description: 每秒大量硬解析，严重影响 shared pool 和 CPU。
+  reason: 应用未使用绑定变量，或 shared pool 过小导致 SQL 被淘汰。
+  recommendation: 强制使用绑定变量；设置 cursor_sharing=FORCE 临时缓解；增大 shared_pool_size。
+
+- id: hard_parse_warning
+  category: Parse
+  severity: WARNING
+  metric: hard_parses_per_sec
+  condition:
+    metric: hard_parses_per_sec
+    op: ">="
+    value: 50
+  finding: 硬解析偏高
+  description: 硬解析频率偏高，可能影响性能。
+  reason: 可能存在部分 SQL 使用字面量而非绑定变量。
+  recommendation: 检查 V$SQLAREA 中 literal SQL；优化应用代码使用绑定变量。
+
+- id: full_table_scans_high
+  category: SQL
+  severity: WARNING
+  metric: long_table_scans_per_sec
+  condition:
+    metric: long_table_scans_per_sec
+    op: ">="
+    value: 100
+  finding: 长表全表扫描频繁
+  description: 大表全表扫描次数过多，可能导致 I/O 和 CPU 压力。
+  reason: 可能缺少索引、统计信息过期导致优化器选择全表扫描、或确实是报表类大范围查询。
+  recommendation: 检查 SQL ordered by Reads；对 OLTP 查询添加合适索引；考虑分区表。
+
+- id: sort_spill_warning
+  category: Memory
+  severity: WARNING
+  metric: sorts_disk_per_sec
+  condition:
+    metric: sorts_disk_per_sec
+    op: ">="
+    value: 10
+  finding: 磁盘排序频繁
+  description: 排序操作频繁溢出到磁盘，说明 PGA 排序区不足。
+  reason: PGA_AGGREGATE_TARGET 偏小或存在超大排序操作。
+  recommendation: 增大 PGA；检查 Top SQL 的排序操作；优化 ORDER BY / GROUP BY / DISTINCT。
+
+- id: row_chaining_warning
+  category: SQL
+  severity: OBSERVE
+  metric: continued_row_per_sec
+  condition:
+    metric: continued_row_per_sec
+    op: ">="
+    value: 1000
+  finding: 行链接/行迁移频繁
+  description: table fetch continued row 频率高，每次需要额外 I/O。
+  reason: 表存在行链接（行太长）或行迁移（UPDATE 导致的碎片）。
+  recommendation: 对频繁更新的表定期 MOVE/SHRINK；检查 PCTFREE 设置；考虑使用更大的 block size。
+
+- id: rollback_ratio_warning
+  category: Application
+  severity: OBSERVE
+  metric: rollback_ratio
+  condition:
+    metric: rollback_ratio
+    op: ">="
+    value: 5
+  finding: 事务回滚比例偏高
+  description: user rollbacks / user commits 占比超过阈值，可能存在应用逻辑问题。
+  reason: 应用频繁回滚事务，浪费数据库资源。
+  recommendation: 检查应用回滚逻辑；是否因外键缺少索引导致 TM 锁等待后回滚。
