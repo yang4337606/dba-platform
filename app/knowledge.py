@@ -1,10 +1,13 @@
 """Local knowledge base for learned patterns and case history. JSON file storage."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
 import shutil
+import threading
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -30,6 +33,34 @@ ACTIVE_THRESHOLD = 0.65
 REJECT_THRESHOLD = 0.20
 AUTO_PROMOTE_HITS = 10
 
+# Simple obfuscation key derived from machine-id or fallback
+_OBFUSCATION_KEY = hashlib.sha256(
+    os.environ.get("SECRET_KEY", "awr-clean-default-key").encode()
+).digest()
+
+
+def _obfuscate(plaintext: str) -> str:
+    """Simple XOR-based obfuscation for API keys at rest.
+
+    This is NOT cryptographic encryption — it prevents casual exposure
+    (e.g. someone opening the JSON file) but not a determined attacker.
+    For production use, integrate a proper secrets manager.
+    """
+    data = plaintext.encode()
+    key = _OBFUSCATION_KEY
+    obfuscated = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return "obf:" + base64.b64encode(obfuscated).decode()
+
+
+def _deobfuscate(stored: str) -> str:
+    """Reverse the obfuscation."""
+    if not stored.startswith("obf:"):
+        # Legacy plaintext — return as-is
+        return stored
+    raw = base64.b64decode(stored[4:])
+    key = _OBFUSCATION_KEY
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(raw)).decode()
+
 
 class KnowledgeBase:
     """Manages patterns and cases stored in JSON files."""
@@ -37,42 +68,72 @@ class KnowledgeBase:
     def __init__(self, knowledge_dir: str = KNOWLEDGE_DIR) -> None:
         self.knowledge_dir = knowledge_dir
         os.makedirs(self.knowledge_dir, exist_ok=True)
+        self._lock = threading.Lock()
+        self._patterns_cache: dict | None = None
+        self._patterns_cache_mtime: float = 0
 
     # === Config ===
 
     def load_config(self) -> dict[str, str]:
         """Load LLM config. Env vars override file values."""
         config = self._read_json(CONFIG_FILE, {})
+        stored_key = config.get("api_key", "")
+        # Deobfuscate stored key
+        api_key = _deobfuscate(stored_key) if stored_key else ""
         return {
             "base_url": os.environ.get("LLM_BASE_URL") or config.get("base_url", ""),
-            "api_key": os.environ.get("LLM_API_KEY") or config.get("api_key", ""),
+            "api_key": os.environ.get("LLM_API_KEY") or api_key,
             "model": os.environ.get("LLM_MODEL") or config.get("model", ""),
         }
 
     def save_config(self, base_url: str, api_key: str, model: str) -> None:
-        """Save LLM config to file."""
-        existing = self._read_json(CONFIG_FILE, {})
-        existing["base_url"] = base_url
-        if api_key:
-            existing["api_key"] = api_key
-        existing["model"] = model
-        self._write_json(CONFIG_FILE, existing)
+        """Save LLM config to file. API key is obfuscated at rest."""
+        with self._lock:
+            existing = self._read_json(CONFIG_FILE, {})
+            existing["base_url"] = base_url
+            if api_key:
+                existing["api_key"] = _obfuscate(api_key)
+            existing["model"] = model
+            self._write_json(CONFIG_FILE, existing)
 
     # === Patterns ===
 
     def get_active_patterns(self) -> list[dict]:
         """Get all active patterns for LLM context."""
-        data = self._read_json(PATTERNS_FILE, {"patterns": []})
+        data = self._read_patterns_cached()
         return [p for p in data.get("patterns", []) if p.get("status") in ("active", "observed")]
 
     def get_all_patterns(self) -> list[dict]:
-        data = self._read_json(PATTERNS_FILE, {"patterns": []})
+        data = self._read_patterns_cached()
         return data.get("patterns", [])
+
+    def _read_patterns_cached(self) -> dict:
+        """Read patterns.json with mtime-based caching."""
+        try:
+            mtime = os.path.getmtime(PATTERNS_FILE)
+        except OSError:
+            return {"patterns": []}
+        if self._patterns_cache is not None and mtime == self._patterns_cache_mtime:
+            return self._patterns_cache
+        data = self._read_json(PATTERNS_FILE, {"patterns": []})
+        self._patterns_cache = data
+        self._patterns_cache_mtime = mtime
+        return data
+
+    def _invalidate_patterns_cache(self) -> None:
+        """Invalidate the patterns cache after a write."""
+        self._patterns_cache = None
+        self._patterns_cache_mtime = 0
 
     def learn_patterns(self, patterns: list[dict]) -> list[str]:
         """Save new patterns from LLM analysis. Returns list of pattern IDs."""
         if not patterns:
             return []
+        with self._lock:
+            return self._learn_patterns_locked(patterns)
+
+    def _learn_patterns_locked(self, patterns: list[dict]) -> list[str]:
+        """Internal learn_patterns implementation (must hold self._lock)."""
         data = self._read_json(PATTERNS_FILE, {"patterns": []})
         existing_names = {p["name"] for p in data["patterns"]}
         new_ids = []
@@ -129,31 +190,35 @@ class KnowledgeBase:
             new_ids.append(pattern_id)
 
         self._write_json(PATTERNS_FILE, data)
+        self._invalidate_patterns_cache()
         return new_ids
 
     def update_pattern_hits(self, matched_names: list[str]) -> None:
         """Boost confidence for matched pattern names."""
         if not matched_names:
             return
-        data = self._read_json(PATTERNS_FILE, {"patterns": []})
-        matched_set = set(matched_names)
-        changed = False
+        with self._lock:
+            data = self._read_json(PATTERNS_FILE, {"patterns": []})
+            matched_set = set(matched_names)
+            changed = False
 
-        for p in data["patterns"]:
-            if p["name"] in matched_set:
-                p["hit_count"] = p.get("hit_count", 0) + 1
-                p["miss_streak"] = 0
-                p["confidence"] = min(1.0, p.get("confidence", INITIAL_CONFIDENCE) + HIT_BOOST)
-                p["last_hit_at"] = datetime.utcnow().isoformat()
-                self._update_pattern_status(p)
-                changed = True
+            for p in data["patterns"]:
+                if p["name"] in matched_set:
+                    p["hit_count"] = p.get("hit_count", 0) + 1
+                    p["miss_streak"] = 0
+                    p["confidence"] = min(1.0, p.get("confidence", INITIAL_CONFIDENCE) + HIT_BOOST)
+                    p["last_hit_at"] = datetime.utcnow().isoformat()
+                    self._update_pattern_status(p)
+                    changed = True
 
-        if changed:
-            self._write_json(PATTERNS_FILE, data)
+            if changed:
+                self._write_json(PATTERNS_FILE, data)
+                self._invalidate_patterns_cache()
 
     def decay_missed_patterns(self) -> None:
         """Decay patterns that haven't been hit recently. Run periodically."""
-        data = self._read_json(PATTERNS_FILE, {"patterns": []})
+        with self._lock:
+            data = self._read_json(PATTERNS_FILE, {"patterns": []})
         now = datetime.utcnow()
         changed = False
 
@@ -180,8 +245,7 @@ class KnowledgeBase:
 
         if changed:
             self._write_json(PATTERNS_FILE, data)
-
-    def get_stats(self) -> dict[str, int]:
+            self._invalidate_patterns_cache()
         """Get knowledge base statistics."""
         patterns = self.get_all_patterns()
         cases = self._read_json(CASES_FILE, {"cases": []}).get("cases", [])
@@ -344,10 +408,12 @@ class KnowledgeBase:
 
     def replace_patterns(self, new_patterns: list[dict]) -> dict:
         """Atomically replace the patterns list. Returns summary."""
-        old_data = self._read_json(PATTERNS_FILE, {"patterns": []})
-        old_count = len(old_data.get("patterns", []))
-        self._write_json(PATTERNS_FILE, {"patterns": new_patterns})
-        new_count = len(new_patterns)
+        with self._lock:
+            old_data = self._read_json(PATTERNS_FILE, {"patterns": []})
+            old_count = len(old_data.get("patterns", []))
+            self._write_json(PATTERNS_FILE, {"patterns": new_patterns})
+            self._invalidate_patterns_cache()
+            new_count = len(new_patterns)
         return {"old_count": old_count, "new_count": new_count}
 
     def _prune_backups(self) -> None:
