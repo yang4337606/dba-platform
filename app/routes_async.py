@@ -86,7 +86,8 @@ def get_task_status(task_id):
     if not task:
         return jsonify({"success": False, "error": "任务不存在"}), 404
 
-    response = task.to_dict()
+    response = {"success": True}
+    response.update(task.to_dict())
     if task.status == "completed" and task.result:
         response["result"] = task.result
     return jsonify(response)
