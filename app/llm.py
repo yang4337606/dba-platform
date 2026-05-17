@@ -428,7 +428,7 @@ class LLMClient:
                 {"parameter": "参数名", "current": "当前问题", "recommended": "建议值或调整方向", "reason": "原因"}
             ],
             "learned_patterns": [
-                {"pattern_name": "模式名", "conditions": "触发条件（用自然语言描述指标和阈值）", "solution": "解决方案"}
+                {"pattern_name": "模式名（必填）", "conditions": "触发条件（用自然语言描述指标和阈值，必填）", "solution": "解决方案（必填）"}
             ]
         }, ensure_ascii=False, indent=2))
 
@@ -565,7 +565,7 @@ class LLMClient:
                 }
             ],
             "learned_patterns": [
-                {"pattern_name": "模式名", "conditions": "触发条件", "solution": "解决方案"}
+                {"pattern_name": "模式名（必填）", "conditions": "触发条件（必填）", "solution": "解决方案（必填）"}
             ]
         }, ensure_ascii=False, indent=2))
 
