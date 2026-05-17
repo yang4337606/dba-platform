@@ -92,7 +92,8 @@ class RAGRetriever:
         self.vectorizer = SimpleVectorizer()
         self.index = {}  # {record_id: vector}
         self._last_build = 0
-        self._ttl = 300  # 索引有效期 5 分钟
+        self._ttl = 1800  # 索引有效期 30 分钟（减少重建频率）
+        self._lock = threading.Lock()
         self._build_index()
 
     def _build_index(self):
@@ -133,10 +134,11 @@ class RAGRetriever:
             return
         text = self._prepare_text(record)
         vector = self.vectorizer.vectorize(text)
-        self.index[record['id']] = {
-            'vector': vector,
-            'record': record
-        }
+        with self._lock:
+            self.index[record['id']] = {
+                'vector': vector,
+                'record': record
+            }
 
     def _prepare_text(self, record):
         """准备用于向量化的文本"""
@@ -157,18 +159,19 @@ class RAGRetriever:
         """搜索相似案例"""
         self._ensure_fresh()
 
-        if not self.index:
-            return []
-
-        # 向量化查询
         query_vector = self.vectorizer.vectorize(query)
-
         if not query_vector:
             return []
 
-        # 计算相似度
+        # Take a snapshot under lock to avoid iteration issues
+        with self._lock:
+            index_snapshot = dict(self.index)
+
+        if not index_snapshot:
+            return []
+
         similarities = []
-        for record_id, data in self.index.items():
+        for record_id, data in index_snapshot.items():
             similarity = self.vectorizer.cosine_similarity(query_vector, data['vector'])
             if similarity >= min_similarity:
                 similarities.append({
@@ -176,7 +179,6 @@ class RAGRetriever:
                     'similarity': similarity
                 })
 
-        # 排序并返回
         similarities.sort(key=lambda x: x['similarity'], reverse=True)
         return similarities[:limit]
 
