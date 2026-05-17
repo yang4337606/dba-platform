@@ -1,23 +1,44 @@
 import sqlite3
 import json
+import logging
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
     def __init__(self, db_path="data/history.db"):
         self.db_path = db_path
+        self._local = threading.local()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    @contextmanager
     def _get_conn(self):
-        """Get a thread-safe connection."""
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+        """Get a thread-local connection with proper cleanup."""
+        conn = getattr(self._local, 'conn', None)
+        reuse = conn is not None
+        if not reuse:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            self._local.conn = conn
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            if not reuse:
+                self._local.conn = None
+                conn.close()
 
     def _init_db(self):
-        conn = self._get_conn()
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS analysis_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,116 +91,97 @@ class Database:
 
     def save_analysis(self, filename, analyzer_type, result, llm_result, markdown):
         """保存分析结果"""
-        conn = sqlite3.connect(self.db_path)
+        with self._get_conn() as conn:
+            # 提取关键指标
+            metrics = result.get("metrics", {})
+            diagnosis = result.get("diagnosis", {})
 
-        # 提取关键指标
-        metrics = result.get("metrics", {})
-        diagnosis = result.get("diagnosis", {})
+            # 提取纯文本分析（向后兼容）
+            llm_analysis_text = ""
+            if llm_result:
+                llm_analysis_text = llm_result.get("expert_analysis", "") or llm_result.get("analysis", "")
 
-        # 提取纯文本分析（向后兼容）
-        llm_analysis_text = ""
-        if llm_result:
-            llm_analysis_text = llm_result.get("expert_analysis", "") or llm_result.get("analysis", "")
+            # 完整 LLM 结果 JSON
+            llm_json = json.dumps(llm_result, ensure_ascii=False) if llm_result else None
 
-        # 完整 LLM 结果 JSON
-        llm_json = json.dumps(llm_result, ensure_ascii=False) if llm_result else None
+            conn.execute("""
+                INSERT INTO analysis_history (
+                    filename, analyzer_type,
+                    db_time, elapsed_time, aas, db_cpu_percent, load_type,
+                    main_problem, diagnosis_summary,
+                    raw_result, llm_analysis, llm_result_json, markdown_content
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                filename,
+                analyzer_type,
+                metrics.get("db_time"),
+                metrics.get("elapsed_time"),
+                metrics.get("aas"),
+                metrics.get("db_cpu_percent"),
+                metrics.get("load_type"),
+                diagnosis.get("main_problem"),
+                diagnosis.get("summary"),
+                json.dumps(result, ensure_ascii=False),
+                llm_analysis_text,
+                llm_json,
+                markdown
+            ))
 
-        conn.execute("""
-            INSERT INTO analysis_history (
-                filename, analyzer_type,
-                db_time, elapsed_time, aas, db_cpu_percent, load_type,
-                main_problem, diagnosis_summary,
-                raw_result, llm_analysis, llm_result_json, markdown_content
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            filename,
-            analyzer_type,
-            metrics.get("db_time"),
-            metrics.get("elapsed_time"),
-            metrics.get("aas"),
-            metrics.get("db_cpu_percent"),
-            metrics.get("load_type"),
-            diagnosis.get("main_problem"),
-            diagnosis.get("summary"),
-            json.dumps(result, ensure_ascii=False),
-            llm_analysis_text,
-            llm_json,
-            markdown
-        ))
-
-        conn.commit()
-        record_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.close()
+            conn.commit()
+            record_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         return record_id
 
     def get_all_history(self, limit=50):
         """获取所有历史记录"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute("""
-            SELECT id, created_at, filename, analyzer_type,
-                   db_time, elapsed_time, aas, db_cpu_percent, load_type,
-                   main_problem, diagnosis_summary
-            FROM analysis_history
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
-
-        records = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT id, created_at, filename, analyzer_type,
+                       db_time, elapsed_time, aas, db_cpu_percent, load_type,
+                       main_problem, diagnosis_summary
+                FROM analysis_history
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+            records = [dict(row) for row in cursor.fetchall()]
         return records
 
     def get_by_id(self, record_id):
         """获取单条记录详情"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute("""
-            SELECT * FROM analysis_history WHERE id = ?
-        """, (record_id,))
-
-        row = cursor.fetchone()
-        conn.close()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM analysis_history WHERE id = ?
+            """, (record_id,))
+            row = cursor.fetchone()
 
         if row:
             record = dict(row)
             if record.get("raw_result"):
                 record["raw_result"] = json.loads(record["raw_result"])
-            # Parse structured LLM result (new format)
             if record.get("llm_result_json"):
                 record["llm_result"] = json.loads(record["llm_result_json"])
             elif record.get("llm_analysis"):
-                # Backward compat: old records with only text
                 record["llm_result"] = {"expert_analysis": record["llm_analysis"]}
             return record
         return None
 
     def delete_by_id(self, record_id):
         """删除记录"""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("DELETE FROM analysis_history WHERE id = ?", (record_id,))
-        conn.commit()
-        conn.close()
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM analysis_history WHERE id = ?", (record_id,))
+            conn.commit()
 
     def get_similar_cases(self, main_problem, limit=5):
         """检索相似案例（简单关键词匹配）"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute("""
-            SELECT id, created_at, filename, main_problem, diagnosis_summary
-            FROM analysis_history
-            WHERE main_problem LIKE ?
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (f"%{main_problem}%", limit))
-
-        records = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT id, created_at, filename, main_problem, diagnosis_summary
+                FROM analysis_history
+                WHERE main_problem LIKE ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (f"%{main_problem}%", limit))
+            records = [dict(row) for row in cursor.fetchall()]
         return records
 
     def compare_records(self, record1, record2):
@@ -267,8 +269,7 @@ class Database:
                 # Optimization suggestions based on comparison
                 comparison["optimization_suggestions"] = self._generate_compare_suggestions(comparison, result1, result2)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to compare events/sql: {e}")
+            logger.warning("Failed to compare events/sql: %s", e)
 
         return comparison
 
@@ -406,15 +407,11 @@ class Database:
 
     def get_profile(self, db_identifier):
         """获取数据库画像"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute("""
-            SELECT * FROM database_profiles WHERE db_identifier = ?
-        """, (db_identifier,))
-
-        row = cursor.fetchone()
-        conn.close()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM database_profiles WHERE db_identifier = ?
+            """, (db_identifier,))
+            row = cursor.fetchone()
 
         if row:
             profile = dict(row)
@@ -429,65 +426,55 @@ class Database:
                      business_type=None, environment=None, common_bottlenecks=None,
                      optimized_items=None, notes=None):
         """保存或更新数据库画像"""
-        conn = sqlite3.connect(self.db_path)
+        with self._get_conn() as conn:
+            existing = conn.execute(
+                "SELECT id FROM database_profiles WHERE db_identifier = ?",
+                (db_identifier,)
+            ).fetchone()
 
-        # 检查是否已存在
-        existing = conn.execute(
-            "SELECT id FROM database_profiles WHERE db_identifier = ?",
-            (db_identifier,)
-        ).fetchone()
-
-        if existing:
-            # 更新
-            conn.execute("""
-                UPDATE database_profiles
-                SET db_name = COALESCE(?, db_name),
-                    db_version = COALESCE(?, db_version),
-                    business_type = COALESCE(?, business_type),
-                    environment = COALESCE(?, environment),
-                    common_bottlenecks = COALESCE(?, common_bottlenecks),
-                    optimized_items = COALESCE(?, optimized_items),
-                    notes = COALESCE(?, notes),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE db_identifier = ?
-            """, (
-                db_name, db_version, business_type, environment,
-                json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
-                json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
-                notes, db_identifier
-            ))
-        else:
-            # 插入
-            conn.execute("""
-                INSERT INTO database_profiles (
+            if existing:
+                conn.execute("""
+                    UPDATE database_profiles
+                    SET db_name = COALESCE(?, db_name),
+                        db_version = COALESCE(?, db_version),
+                        business_type = COALESCE(?, business_type),
+                        environment = COALESCE(?, environment),
+                        common_bottlenecks = COALESCE(?, common_bottlenecks),
+                        optimized_items = COALESCE(?, optimized_items),
+                        notes = COALESCE(?, notes),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE db_identifier = ?
+                """, (
+                    db_name, db_version, business_type, environment,
+                    json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
+                    json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
+                    notes, db_identifier
+                ))
+            else:
+                conn.execute("""
+                    INSERT INTO database_profiles (
+                        db_identifier, db_name, db_version, business_type, environment,
+                        common_bottlenecks, optimized_items, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
                     db_identifier, db_name, db_version, business_type, environment,
-                    common_bottlenecks, optimized_items, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                db_identifier, db_name, db_version, business_type, environment,
-                json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
-                json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
-                notes
-            ))
+                    json.dumps(common_bottlenecks, ensure_ascii=False) if common_bottlenecks else None,
+                    json.dumps(optimized_items, ensure_ascii=False) if optimized_items else None,
+                    notes
+                ))
 
-        conn.commit()
-        conn.close()
+            conn.commit()
 
     def get_all_profiles(self):
         """获取所有数据库画像"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-
-        cursor = conn.execute("""
-            SELECT id, db_identifier, db_name, db_version, business_type,
-                   environment, updated_at
-            FROM database_profiles
-            ORDER BY updated_at DESC
-        """)
-
-        records = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                SELECT id, db_identifier, db_name, db_version, business_type,
+                       environment, updated_at
+                FROM database_profiles
+                ORDER BY updated_at DESC
+            """)
+            records = [dict(row) for row in cursor.fetchall()]
         return records
 
     def update_profile_from_analysis(self, db_identifier, main_problem):
@@ -514,81 +501,69 @@ class Database:
 
     def get_trend_data(self, days=30, analyzer_type=None):
         """获取性能趋势数据"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        with self._get_conn() as conn:
+            query = """
+                SELECT
+                    id,
+                    created_at,
+                    filename,
+                    db_time,
+                    aas,
+                    db_cpu_percent,
+                    load_type,
+                    main_problem
+                FROM analysis_history
+                WHERE datetime(created_at) >= datetime('now', '-' || ? || ' days')
+            """
+            params = [days]
 
-        query = """
-            SELECT
-                id,
-                created_at,
-                filename,
-                db_time,
-                aas,
-                db_cpu_percent,
-                load_type,
-                main_problem
-            FROM analysis_history
-            WHERE datetime(created_at) >= datetime('now', '-' || ? || ' days')
-        """
-        params = [days]
+            if analyzer_type:
+                query += " AND analyzer_type = ?"
+                params.append(analyzer_type)
 
-        if analyzer_type:
-            query += " AND analyzer_type = ?"
-            params.append(analyzer_type)
+            query += " ORDER BY created_at ASC"
 
-        query += " ORDER BY created_at ASC"
-
-        cursor = conn.execute(query, params)
-        records = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-
+            cursor = conn.execute(query, params)
+            records = [dict(row) for row in cursor.fetchall()]
         return records
 
     def get_statistics(self):
         """获取统计信息"""
-        conn = sqlite3.connect(self.db_path)
+        with self._get_conn() as conn:
+            stats = {}
 
-        stats = {}
+            stats["total_records"] = conn.execute(
+                "SELECT COUNT(*) FROM analysis_history"
+            ).fetchone()[0]
 
-        # 总记录数
-        stats["total_records"] = conn.execute(
-            "SELECT COUNT(*) FROM analysis_history"
-        ).fetchone()[0]
+            stats["recent_records"] = conn.execute(
+                "SELECT COUNT(*) FROM analysis_history WHERE datetime(created_at) >= datetime('now', '-7 days')"
+            ).fetchone()[0]
 
-        # 最近7天记录数
-        stats["recent_records"] = conn.execute(
-            "SELECT COUNT(*) FROM analysis_history WHERE datetime(created_at) >= datetime('now', '-7 days')"
-        ).fetchone()[0]
+            result = conn.execute(
+                "SELECT AVG(db_time) FROM analysis_history WHERE db_time IS NOT NULL"
+            ).fetchone()
+            stats["avg_db_time"] = result[0] if result[0] else 0
 
-        # 平均 DB Time
-        result = conn.execute(
-            "SELECT AVG(db_time) FROM analysis_history WHERE db_time IS NOT NULL"
-        ).fetchone()
-        stats["avg_db_time"] = result[0] if result[0] else 0
+            result = conn.execute(
+                "SELECT AVG(aas) FROM analysis_history WHERE aas IS NOT NULL"
+            ).fetchone()
+            stats["avg_aas"] = result[0] if result[0] else 0
 
-        # 平均 AAS
-        result = conn.execute(
-            "SELECT AVG(aas) FROM analysis_history WHERE aas IS NOT NULL"
-        ).fetchone()
-        stats["avg_aas"] = result[0] if result[0] else 0
+            cursor = conn.execute("""
+                SELECT main_problem, COUNT(*) as count
+                FROM analysis_history
+                WHERE main_problem IS NOT NULL AND main_problem != ''
+                GROUP BY main_problem
+                ORDER BY count DESC
+                LIMIT 5
+            """)
+            stats["top_problems"] = [{"problem": row[0], "count": row[1]} for row in cursor.fetchall()]
 
-        # 最常见问题 Top 5
-        cursor = conn.execute("""
-            SELECT main_problem, COUNT(*) as count
-            FROM analysis_history
-            WHERE main_problem IS NOT NULL AND main_problem != ''
-            GROUP BY main_problem
-            ORDER BY count DESC
-            LIMIT 5
-        """)
-        stats["top_problems"] = [{"problem": row[0], "count": row[1]} for row in cursor.fetchall()]
+            stats["total_profiles"] = conn.execute(
+                "SELECT COUNT(*) FROM database_profiles"
+            ).fetchone()[0]
 
-        # 数据库画像数量
-        stats["total_profiles"] = conn.execute(
-            "SELECT COUNT(*) FROM database_profiles"
-        ).fetchone()[0]
-
-        conn.close()
         return stats
 
     def detect_anomalies(self, records, metric="db_time", threshold=1.5):
