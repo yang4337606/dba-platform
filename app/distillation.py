@@ -318,10 +318,10 @@ class DistillationEngine:
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # Tier 3: first { to last }
+        # Tier 3: first { to last } (with size limit to prevent JSON bombs)
         first = text.find("{")
         last = text.rfind("}")
-        if first != -1 and last > first:
+        if first != -1 and last > first and (last - first) < 100_000:
             try:
                 result = json.loads(text[first:last + 1])
                 if isinstance(result, dict):
