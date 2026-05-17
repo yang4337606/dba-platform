@@ -446,10 +446,139 @@ EVENT_SEMANTICS = {
         "tcp",
         "sd",
     ],
+
+    # --- 19c/21c/23c 新增等待事件 ---
+    "modern_oracle_features": [
+        "in-memory",
+        "im populate",
+        "im repopulate",
+        "im scan",
+        "im fetch",
+        "im column store",
+        "auto index",
+        "auto spm",
+        "blockchain",
+        "immutable",
+        "json",
+        "json table",
+        "soda",
+        "graph",
+        "ml",
+        "machine learning",
+        "memoptimize",
+        "memoptimized",
+        "true cache",
+        "globally distributed",
+        "sharding",
+        "shard",
+    ],
+
+    # --- DBWR/脏块写出 ---
+    "dbwr_write_chain": [
+        "db file parallel write",
+        "db file single write",
+        "free buffer waits",
+        "write complete waits",
+        "buffer busy - dbwr",
+        "dbwr",
+        "checkpoint completed",
+        "async disk io",
+    ],
+
+    # --- 高频遗漏事件补充 ---
+    "enqueue_detailed": [
+        "enq: tx - row lock contention",
+        "enq: tx - allocate itl entry",
+        "enq: tx - index contention",
+        "enq: tm - contention",
+        "enq: hw - contention",
+        "enq: sq - contention",
+        "enq: ss - contention",
+        "enq: sh - contention",
+        "enq: cf - contention",
+        "enq: ps - contention",
+        "enq: fb - contention",
+        "enq: js - contention",
+        "enq: md - contention",
+        "enq: mw - contention",
+        "enq: td - contention",
+        "enq: to - contention",
+        "enq: ul - contention",
+        "enq: wf - contention",
+    ],
+
+    # --- 数据泵/外部表 ---
+    "data_pump_external": [
+        "data pump",
+        "datapump",
+        "external table",
+        "preprocessor",
+        "oracle loader",
+        "direct load",
+        "sql loader",
+    ],
 }
 
 
-SEMANTIC_DISPLAY_NAMES = {
+# ============================================================
+# 语义组组合权重：用于因果图推理时的权重计算
+# weight: 该语义组的诊断显著性权重 (0.0-1.0)
+# amplifies: 当该组与其他组同时出现时，目标组的权重被放大
+# ============================================================
+
+SEMANTIC_WEIGHTS = {
+    "redo_pipeline":        {"weight": 0.9, "amplifies": ["commit_sync", "storage_io"]},
+    "temp_pressure":        {"weight": 0.7, "amplifies": ["pga_memory", "storage_io", "full_scan"]},
+    "oltp_random_read":     {"weight": 0.8, "amplifies": ["storage_io", "buffer_cache_activity"]},
+    "full_scan":            {"weight": 0.7, "amplifies": ["storage_io", "temp_pressure"]},
+    "hot_block":            {"weight": 0.9, "amplifies": ["lock_contention", "buffer_cache_activity"]},
+    "hot_object":           {"weight": 0.9, "amplifies": ["lock_contention"]},
+    "lock_contention":      {"weight": 1.0, "amplifies": ["hot_object", "hot_block"]},
+    "parse_pressure":       {"weight": 0.8, "amplifies": ["shared_pool_memory", "cursor_management"]},
+    "network_wait":         {"weight": 0.5, "amplifies": ["jdbc_connection"]},
+    "storage_io":           {"weight": 0.8, "amplifies": ["dbwr_write_chain", "redo_pipeline"]},
+    "rac_global_cache":     {"weight": 0.9, "amplifies": ["rac_gc_network"]},
+    "rac_gc_network":       {"weight": 0.8, "amplifies": ["rac_global_cache", "network_wait"]},
+    "parallel_query":       {"weight": 0.6, "amplifies": ["temp_pressure", "pga_memory"]},
+    "pga_memory":           {"weight": 0.7, "amplifies": ["temp_pressure"]},
+    "lob_operations":       {"weight": 0.5, "amplifies": ["storage_io"]},
+    "scheduler_resource":   {"weight": 0.6, "amplifies": []},
+    "flashback_log":        {"weight": 0.4, "amplifies": ["storage_io"]},
+    "adg_transport":        {"weight": 0.7, "amplifies": ["redo_pipeline", "network_wait"]},
+    "undo_management":      {"weight": 0.7, "amplifies": ["storage_io", "lock_contention"]},
+    "cursor_management":    {"weight": 0.7, "amplifies": ["parse_pressure", "shared_pool_memory"]},
+    "commit_sync":          {"weight": 0.8, "amplifies": ["redo_pipeline", "storage_io"]},
+    "dbwr_write_chain":     {"weight": 0.8, "amplifies": ["storage_io", "buffer_cache_activity"]},
+    "buffer_cache_activity": {"weight": 0.6, "amplifies": ["storage_io", "hot_block"]},
+    "shared_pool_memory":   {"weight": 0.6, "amplifies": ["parse_pressure", "cursor_management"]},
+    "enqueue_detailed":     {"weight": 0.9, "amplifies": ["lock_contention", "hot_object"]},
+}
+
+
+def compute_weighted_semantics(semantic_groups):
+    """Compute weighted diagnostic scores considering cross-group amplification.
+
+    Returns a dict of {group_name: weighted_score} sorted by score descending.
+    """
+    base_scores = {}
+    for group, data in semantic_groups.items():
+        pct = data.get("pct_db_time", 0)
+        if pct <= 0:
+            continue
+        weight_info = SEMANTIC_WEIGHTS.get(group, {"weight": 0.5, "amplifies": []})
+        base_scores[group] = pct * weight_info["weight"]
+
+    # Apply amplification: if group A amplifies group B, and both are active,
+    # increase B's score by 20% of A's base score
+    amplified_scores = dict(base_scores)
+    for group, score in base_scores.items():
+        weight_info = SEMANTIC_WEIGHTS.get(group, {"weight": 0.5, "amplifies": []})
+        for target in weight_info["amplifies"]:
+            if target in amplified_scores:
+                amplified_scores[target] += score * 0.2
+
+    # Sort by score descending
+    return dict(sorted(amplified_scores.items(), key=lambda x: x[1], reverse=True)) = {
     "redo_pipeline": "Redo/LGWR 写入链路",
     "temp_pressure": "TEMP/PGA 压力",
     "oltp_random_read": "OLTP 随机读",
@@ -470,6 +599,28 @@ SEMANTIC_DISPLAY_NAMES = {
     "adg_transport": "ADG Redo 传输",
     "undo_management": "Undo 管理",
     "checkpoint_tuning": "Checkpoint 调优",
+    "cursor_management": "游标管理",
+    "partition_ddl": "分区/DDL 操作",
+    "commit_sync": "Commit 同步写",
+    "jdbc_connection": "JDBC/应用连接",
+    "olap_large_query": "OLAP/DSS 大查询",
+    "database_health": "数据库后台健康",
+    "archive_backup": "归档/备份",
+    "stats_gathering": "统计信息收集",
+    "mview_replication": "物化视图/复制",
+    "index_maintenance": "索引维护",
+    "buffer_cache_activity": "Buffer Cache 活动",
+    "shared_pool_memory": "Shared Pool 内存",
+    "log_switch_frequency": "日志切换频率",
+    "table_access": "表访问路径",
+    "connection_session": "连接/会话建立",
+    "parallel_ddl": "并行 DDL",
+    "twelve_c_new_features": "12c+ 新特性",
+    "cloud_rac_extended": "云/RAC 扩展",
+    "modern_oracle_features": "19c/21c/23c 新特性",
+    "dbwr_write_chain": "DBWR 写出链路",
+    "enqueue_detailed": "Enqueue 详细分类",
+    "data_pump_external": "数据泵/外部表",
 }
 
 
