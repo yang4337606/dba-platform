@@ -138,8 +138,18 @@ class KnowledgeBase:
         existing_names = {p["name"] for p in data["patterns"]}
         new_ids = []
 
+        # Deduplicate incoming patterns by name to avoid double-counting
+        unique_patterns: dict[str, dict] = {}
+        for p in patterns:
+            name = p.get("pattern_name", "").strip()
+            if not name:
+                logger.warning("Skipping learned pattern with empty name")
+                continue
+            if name not in unique_patterns:
+                unique_patterns[name] = p
+
         # Increment miss streak for all existing patterns not matched this round
-        returned_names = {p.get("pattern_name", "").strip() for p in patterns if p.get("pattern_name", "").strip()}
+        returned_names = set(unique_patterns.keys())
         for existing in data["patterns"]:
             if existing["name"] not in returned_names:
                 existing["miss_streak"] = existing.get("miss_streak", 0) + 1
@@ -150,15 +160,16 @@ class KnowledgeBase:
                 if last_hit:
                     try:
                         last_hit_dt = datetime.fromisoformat(last_hit)
+                        if last_hit_dt.tzinfo is not None:
+                            last_hit_dt = last_hit_dt.replace(tzinfo=None)
                         if (datetime.utcnow() - last_hit_dt).days > STALE_DAYS:
                             existing["confidence"] = max(0, existing.get("confidence", 0) + STALE_DECAY)
                     except (ValueError, TypeError):
-                        pass
+                        logger.debug("Failed to parse last_hit_at for pattern %s", existing.get("name", ""))
                 self._update_pattern_status(existing)
 
-        for p in patterns:
-            name = p.get("pattern_name", "").strip()
-            if not name or name in existing_names:
+        for name, p in unique_patterns.items():
+            if name in existing_names:
                 # Match existing pattern - boost confidence
                 for existing in data["patterns"]:
                     if existing["name"] == name:
