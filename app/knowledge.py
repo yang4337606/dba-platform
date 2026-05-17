@@ -219,33 +219,38 @@ class KnowledgeBase:
         """Decay patterns that haven't been hit recently. Run periodically."""
         with self._lock:
             data = self._read_json(PATTERNS_FILE, {"patterns": []})
-        now = datetime.utcnow()
-        changed = False
+            now = datetime.utcnow()
+            changed = False
 
-        for p in data["patterns"]:
-            if p.get("source") == "builtin":
-                continue
-            # Increment miss streak
-            p["miss_streak"] = p.get("miss_streak", 0) + 1
-            # Decay after threshold
-            if p["miss_streak"] >= MISS_STREAK_THRESHOLD:
-                p["confidence"] = p.get("confidence", 0) + MISS_DECAY
-                changed = True
-            # Stale decay
-            last_hit = p.get("last_hit_at")
-            if last_hit:
-                try:
-                    last_hit_dt = datetime.fromisoformat(last_hit)
-                    if (now - last_hit_dt).days > STALE_DAYS:
-                        p["confidence"] = p.get("confidence", 0) + STALE_DECAY
-                        changed = True
-                except (ValueError, TypeError):
-                    pass
-            self._update_pattern_status(p)
+            for p in data["patterns"]:
+                if p.get("source") == "builtin":
+                    continue
+                # Increment miss streak
+                p["miss_streak"] = p.get("miss_streak", 0) + 1
+                # Decay after threshold
+                if p["miss_streak"] >= MISS_STREAK_THRESHOLD:
+                    p["confidence"] = max(0, p.get("confidence", 0) + MISS_DECAY)
+                    changed = True
+                # Stale decay
+                last_hit = p.get("last_hit_at")
+                if last_hit:
+                    try:
+                        last_hit_dt = datetime.fromisoformat(last_hit)
+                        # Normalize to naive UTC for comparison
+                        if last_hit_dt.tzinfo is not None:
+                            last_hit_dt = last_hit_dt.replace(tzinfo=None)
+                        if (now - last_hit_dt).days > STALE_DAYS:
+                            p["confidence"] = max(0, p.get("confidence", 0) + STALE_DECAY)
+                            changed = True
+                    except (ValueError, TypeError):
+                        logger.debug("Failed to parse last_hit_at for pattern %s", p.get("name", ""))
+                self._update_pattern_status(p)
 
-        if changed:
-            self._write_json(PATTERNS_FILE, data)
-            self._invalidate_patterns_cache()
+            if changed:
+                self._write_json(PATTERNS_FILE, data)
+                self._invalidate_patterns_cache()
+
+    def get_stats(self) -> dict:
         """Get knowledge base statistics."""
         patterns = self.get_all_patterns()
         cases = self._read_json(CASES_FILE, {"cases": []}).get("cases", [])
