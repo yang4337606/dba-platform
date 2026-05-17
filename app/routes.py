@@ -4,6 +4,7 @@ import logging
 import os
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, send_file, url_for
+from werkzeug.utils import secure_filename
 
 from app.core.registry import get_analyzer, list_analyzers
 from app.core.renderer import render_markdown
@@ -38,8 +39,11 @@ def analyze():
         return redirect(url_for("main.index"))
 
     # Validate file extension
-    import os
-    ext = os.path.splitext(file.filename)[1].lower()
+    safe_name = secure_filename(file.filename)
+    if not safe_name:
+        flash("文件名不合法")
+        return redirect(url_for("main.index"))
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in (".html", ".htm", ".txt"):
         flash("仅支持 .html、.htm、.txt 文件")
         return redirect(url_for("main.index"))
@@ -52,10 +56,24 @@ def analyze():
         flash("文件内容为空")
         return redirect(url_for("main.index"))
 
+    # Basic content sanity check for HTML files
+    if ext in (".html", ".htm"):
+        try:
+            content_str = content.decode("utf-8", errors="ignore")[:200].lower()
+            if not any(tag in content_str for tag in ("<html", "<table", "<!doctype", "<head")):
+                flash("文件内容不像有效的 HTML 文件")
+                return redirect(url_for("main.index"))
+        except Exception:
+            pass
+
     try:
         result = analyzer.analyze(content)
     except NotImplementedError as exc:
         flash(str(exc))
+        return redirect(url_for("main.index"))
+    except Exception as exc:
+        logger.error("Analysis failed for %s: %s", safe_name, exc, exc_info=True)
+        flash(f"分析失败: {exc}")
         return redirect(url_for("main.index"))
 
     markdown = render_markdown(result)
@@ -127,7 +145,7 @@ def analyze():
     record_id = None
     try:
         record_id = db.save_analysis(
-            filename=file.filename,
+            filename=safe_name,
             analyzer_type=analyzer_type,
             result=result.to_dict() if hasattr(result, 'to_dict') else {},
             llm_result=llm_result if llm_result and not llm_result.get("error") else None,
@@ -158,7 +176,7 @@ def analyze():
                     'main_problem': main_problem,
                     'diagnosis_summary': diagnosis_summary,
                     'load_type': result_dict.get("diagnosis", {}).get("load_type", ""),
-                    'filename': file.filename,
+                    'filename': safe_name,
                     'analyzer_type': analyzer_type,
                 })
 
