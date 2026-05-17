@@ -78,4 +78,53 @@ def render_markdown(result):
     else:
         lines.append("- 暂无处理建议。")
 
+    # LLM Deep Analysis
+    llm_da = getattr(result, "llm_deep_analysis", None)
+    if llm_da and not llm_da.get("error"):
+        lines.append("")
+        lines.append("## 七、AI 深度分析")
+        lines.append("")
+
+        if llm_da.get("root_cause_analysis"):
+            lines.append("### 根因分析")
+            lines.append(llm_da["root_cause_analysis"])
+            lines.append("")
+
+        if llm_da.get("problem_propagation_chain"):
+            lines.append("### 问题传播链")
+            for i, chain in enumerate(llm_da["problem_propagation_chain"], 1):
+                cause = chain.get("cause", "")
+                effect = chain.get("effect", "")
+                evidence = chain.get("evidence", "")
+                lines.append(f"{i}. {cause} → {effect}")
+                if evidence:
+                    lines.append(f"   - 证据：{evidence}")
+            lines.append("")
+
+        if llm_da.get("sql_recommendations"):
+            lines.append("### SQL 深度优化建议")
+            for rec in llm_da["sql_recommendations"]:
+                sql_id = rec.get("sql_id", "")
+                issue = rec.get("issue", "")
+                recommendation = rec.get("recommendation", "")
+                hint = rec.get("execution_plan_hint", "")
+                impact = rec.get("estimated_impact", "")
+                lines.append(f"- **{sql_id}** [{impact}]：{issue}")
+                lines.append(f"  - 建议：{recommendation}")
+                if hint:
+                    lines.append(f"  - 执行计划建议：{hint}")
+            lines.append("")
+
+        if llm_da.get("parameter_suggestions"):
+            lines.append("### 参数调整建议")
+            for param in llm_da["parameter_suggestions"]:
+                name = param.get("parameter", "")
+                current = param.get("current_value", "")
+                recommended = param.get("recommended_value", "")
+                reason = param.get("reason", "")
+                lines.append(f"- **{name}**：当前 {current} → 建议 {recommended}")
+                if reason:
+                    lines.append(f"  - 原因：{reason}")
+            lines.append("")
+
     return "\n".join(lines)

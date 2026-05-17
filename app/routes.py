@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import os
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -59,8 +60,22 @@ def analyze():
 
     markdown = render_markdown(result)
 
+    # Extract rule engine results for learning
+    rule_results = None
+    try:
+        rules_path = os.path.join(os.path.dirname(__file__), "analyzers", "oracle_awr", "rules.yaml")
+        import yaml
+        with open(rules_path, encoding="utf-8") as f:
+            rules = yaml.safe_load(f)
+        from app.core.rule_engine import evaluate_rules_grouped
+        workload_type = (result.raw_metrics or {}).get("workload_type", "Mixed")
+        rule_results = evaluate_rules_grouped(result.raw_metrics or {}, rules, workload_type)
+    except Exception:
+        pass
+
     # LLM enhancement (optional)
     llm_result = None
+    deep_result = None
     learning_feedback = None
     llm_config = kb.load_config()
     if llm_config.get("api_key"):
@@ -74,6 +89,16 @@ def analyze():
                 kb.save_case(result, llm_result)
                 learned_pattern_ids = kb.learn_patterns(llm_result.get("learned_patterns", []))
 
+                # Extract learnable patterns from rule engine analysis
+                try:
+                    context = analyzer.build_analysis_context(result.raw_metrics or {})
+                    learnable = analyzer.extract_learnable_patterns(result.raw_metrics or {}, rule_results, context)
+                    if learnable:
+                        engine_learned_ids = kb.learn_patterns(learnable)
+                        learned_pattern_ids.extend(pid for pid in engine_learned_ids if pid)
+                except Exception as e:
+                    logger.warning("Learnable pattern extraction failed: %s", e)
+
                 # 生成学习反馈信息
                 learning_feedback = {
                     "new_patterns_count": len([pid for pid in learned_pattern_ids if pid]),
@@ -81,6 +106,20 @@ def analyze():
                     "total_patterns": len(kb.get_all_patterns()),
                     "active_patterns": len(kb.get_active_patterns()),
                 }
+
+            # Deep analysis (enhanced LLM with comprehensive prompt)
+            try:
+                deep_result = client.deep_analyze(result, result.raw_metrics or {}, active_patterns)
+                if deep_result and not deep_result.get("error"):
+                    result.llm_deep_analysis = deep_result
+                    # Learn patterns from deep analysis too
+                    deep_patterns = deep_result.get("learned_patterns", [])
+                    if deep_patterns:
+                        deep_learned = kb.learn_patterns(deep_patterns)
+                        if learning_feedback:
+                            learning_feedback["new_patterns_count"] += len([pid for pid in deep_learned if pid])
+            except Exception as deep_exc:
+                logger.warning("LLM deep analysis failed: %s", deep_exc)
         except Exception as exc:
             logger.warning("LLM enhancement failed: %s", exc)
 

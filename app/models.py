@@ -183,18 +183,26 @@ class Database:
         return records
 
     def compare_records(self, record1, record2):
-        """对比两条记录，计算差异和趋势"""
+        """对比两条记录，计算差异和趋势（增强版）"""
         comparison = {
             "metrics_diff": {},
             "trend": {},
             "top_events_diff": [],
             "top_sql_diff": [],
+            "problem_domain_diff": [],
+            "severity_change": {},
+            "optimization_suggestions": [],
             "summary": ""
         }
 
         # 对比关键指标
-        metrics = ["db_time", "elapsed_time", "aas", "db_cpu_percent"]
-        for metric in metrics:
+        metrics_to_compare = [
+            ("db_time", "DB Time"),
+            ("elapsed_time", "Elapsed"),
+            ("aas", "AAS"),
+            ("db_cpu_percent", "DB CPU %"),
+        ]
+        for metric, label in metrics_to_compare:
             val1 = record1.get(metric)
             val2 = record2.get(metric)
 
@@ -203,6 +211,7 @@ class Database:
                 pct_change = (diff / val1 * 100) if val1 != 0 else 0
 
                 comparison["metrics_diff"][metric] = {
+                    "label": label,
                     "old": val1,
                     "new": val2,
                     "diff": diff,
@@ -236,19 +245,88 @@ class Database:
 
                 events1 = result1.get("evidence", {}).get("Top Events", [])
                 events2 = result2.get("evidence", {}).get("Top Events", [])
-
-                # 简单对比前5个事件
                 comparison["top_events_diff"] = self._compare_events(events1[:5], events2[:5])
 
-                # 对比 Top SQL
                 sql1 = result1.get("evidence", {}).get("Top SQL", [])
                 sql2 = result2.get("evidence", {}).get("Top SQL", [])
                 comparison["top_sql_diff"] = self._compare_sql(sql1[:5], sql2[:5])
+
+                # Problem domain comparison
+                comparison["problem_domain_diff"] = self._compare_problem_domains(result1, result2)
+
+                # Severity change
+                old_severity = result1.get("severity", "INFO")
+                new_severity = result2.get("severity", "INFO")
+                comparison["severity_change"] = {
+                    "old": old_severity,
+                    "new": new_severity,
+                    "improved": self._severity_rank(new_severity) < self._severity_rank(old_severity),
+                    "degraded": self._severity_rank(new_severity) > self._severity_rank(old_severity),
+                }
+
+                # Optimization suggestions based on comparison
+                comparison["optimization_suggestions"] = self._generate_compare_suggestions(comparison, result1, result2)
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Failed to compare events/sql: {e}")
 
         return comparison
+
+    def _severity_rank(self, severity):
+        return {"INFO": 0, "WARNING": 1, "HIGH": 2}.get(severity, 0)
+
+    def _compare_problem_domains(self, result1, result2):
+        """Compare problem domains between two records."""
+        domains1 = {}
+        domains2 = {}
+
+        # Extract from diagnosis details evidence
+        for item in result1.get("evidence", {}).get("诊断明细 - 问题域", []):
+            domains1[item.get("name", "")] = item.get("value", "")
+        for item in result2.get("evidence", {}).get("诊断明细 - 问题域", []):
+            domains2[item.get("name", "")] = item.get("value", "")
+
+        all_domains = set(domains1.keys()) | set(domains2.keys())
+        diff = []
+        for name in all_domains:
+            v1 = domains1.get(name, "")
+            v2 = domains2.get(name, "")
+            status = "unchanged"
+            if v1 and not v2:
+                status = "resolved"
+            elif v2 and not v1:
+                status = "new"
+            elif v1 != v2:
+                status = "changed"
+            diff.append({"name": name, "old": v1, "new": v2, "status": status})
+        return diff
+
+    def _generate_compare_suggestions(self, comparison, result1, result2):
+        """Generate optimization suggestions based on comparison."""
+        suggestions = []
+
+        # Check if main bottleneck changed
+        old_bottleneck = result1.get("main_bottleneck", "")
+        new_bottleneck = result2.get("main_bottleneck", "")
+        if old_bottleneck and new_bottleneck and old_bottleneck != new_bottleneck:
+            suggestions.append(f"主瓶颈已从 {old_bottleneck} 变为 {new_bottleneck}，需要针对新瓶颈制定优化方案。")
+
+        # Check if any metric worsened significantly
+        for metric, data in comparison.get("metrics_diff", {}).items():
+            if data.get("pct_change", 0) > 50:
+                suggestions.append(f"{data['label']} 恶化了 {data['pct_change']:.1f}%（{data['old']} → {data['new']}），需要重点关注。")
+
+        # Check resolved domains
+        resolved = [d["name"] for d in comparison.get("problem_domain_diff", []) if d["status"] == "resolved"]
+        if resolved:
+            suggestions.append(f"已解决问题域: {', '.join(resolved)}，之前的优化措施有效。")
+
+        # Check new domains
+        new_domains = [d["name"] for d in comparison.get("problem_domain_diff", []) if d["status"] == "new"]
+        if new_domains:
+            suggestions.append(f"新增问题域: {', '.join(new_domains)}，可能是新出现的瓶颈或之前被掩盖的问题。")
+
+        return suggestions
 
     def _compare_events(self, events1, events2):
         """对比两组等待事件"""

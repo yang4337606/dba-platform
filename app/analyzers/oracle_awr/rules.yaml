@@ -1,9 +1,22 @@
+# ============================================================
+# Oracle AWR 诊断规则库 v2.0
+# 支持：单条件、复合条件(all/any嵌套)、工作负载自适应阈值
+# ============================================================
+
+# === CPU 规则 ===
+
 - id: cpu_db_time_high
   category: CPU
   severity: HIGH
   metric: db_cpu_pct_db_time
   condition:
     metric: db_cpu_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 40}
+      OLAP: {op: ">=", value: 60}
+      Batch: {op: ">=", value: 70}
+      Mixed: {op: ">=", value: 50}
+      ETL: {op: ">=", value: 60}
     op: ">="
     value: 70
   finding: DB CPU 占 DB Time 过高
@@ -17,6 +30,12 @@
   metric: db_cpu_pct_db_time
   condition:
     metric: db_cpu_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 25}
+      OLAP: {op: ">=", value: 40}
+      Batch: {op: ">=", value: 50}
+      Mixed: {op: ">=", value: 35}
+      ETL: {op: ">=", value: 40}
     op: ">="
     value: 40
   finding: DB CPU 占比较高
@@ -24,18 +43,39 @@
   reason: DB CPU 占 DB Time 接近一半，说明 SQL 执行计算、逻辑读或执行计划效率需要重点排查。
   recommendation: 检查 Top SQL 的 CPU Time、Buffer Gets 和 Executions。
 
-- id: checkpoint_incomplete
-  category: Redo
-  severity: WARNING
-  metric: log_file_switch_checkpoint_incomplete_pct_db_time
+# === I/O 规则 ===
+
+- id: user_io_high
+  category: I/O
+  severity: HIGH
+  metric: user_io_pct_db_time
   condition:
-    metric: log_file_switch_checkpoint_incomplete_pct_db_time
+    metric: user_io_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 20}
+      OLAP: {op: ">=", value: 40}
+      Batch: {op: ">=", value: 45}
+      Mixed: {op: ">=", value: 25}
+      ETL: {op: ">=", value: 40}
     op: ">="
-    value: 1
-  finding: log file switch checkpoint incomplete 等待异常
-  description: 日志切换时 checkpoint 尚未完成，已经进入 Top Events。
-  reason: 通常表示 redo log 切换过快、redo 日志组偏小、checkpoint 写出跟不上、DBWR 或存储写能力不足。
-  recommendation: 检查 redo log 大小、日志切换频率、checkpoint 参数、DBWR 和存储写入能力。
+    value: 30
+  finding: User I/O 等待占比过高
+  description: 数据库存在明显 I/O 等待。
+  reason: 可能存在大量物理读、全表扫描、索引缺失或存储响应慢。
+  recommendation: 分析 Physical Reads 较高的 SQL 和相关对象。
+
+- id: user_io_warning
+  category: I/O
+  severity: WARNING
+  metric: user_io_pct_db_time
+  condition:
+    metric: user_io_pct_db_time
+    op: ">="
+    value: 15
+  finding: User I/O 等待偏高
+  description: 存在一定 I/O 等待。
+  reason: 可能有部分 SQL 产生较多物理读。
+  recommendation: 检查 SQL ordered by Reads。
 
 - id: logical_reads_high
   category: SQL
@@ -63,31 +103,20 @@
   reason: 可能存在大查询、批处理、全表扫描、直接路径读或索引访问路径不合理。
   recommendation: 检查 SQL ordered by Reads、direct path read 和 db file sequential read 相关 SQL。
 
-- id: user_io_high
-  category: I/O
-  severity: HIGH
-  metric: user_io_pct_db_time
-  condition:
-    metric: user_io_pct_db_time
-    op: ">="
-    value: 30
-  finding: User I/O 等待占比过高
-  description: 数据库存在明显 I/O 等待。
-  reason: 可能存在大量物理读、全表扫描、索引缺失或存储响应慢。
-  recommendation: 分析 Physical Reads 较高的 SQL 和相关对象。
+# === Redo/Checkpoint 规则 ===
 
-- id: user_io_warning
-  category: I/O
+- id: checkpoint_incomplete
+  category: Redo
   severity: WARNING
-  metric: user_io_pct_db_time
+  metric: log_file_switch_checkpoint_incomplete_pct_db_time
   condition:
-    metric: user_io_pct_db_time
+    metric: log_file_switch_checkpoint_incomplete_pct_db_time
     op: ">="
-    value: 15
-  finding: User I/O 等待偏高
-  description: 存在一定 I/O 等待。
-  reason: 可能有部分 SQL 产生较多物理读。
-  recommendation: 检查 SQL ordered by Reads。
+    value: 1
+  finding: log file switch checkpoint incomplete 等待异常
+  description: 日志切换时 checkpoint 尚未完成，已经进入 Top Events。
+  reason: 通常表示 redo log 切换过快、redo 日志组偏小、checkpoint 写出跟不上、DBWR 或存储写能力不足。
+  recommendation: 检查 redo log 大小、日志切换频率、checkpoint 参数、DBWR 和存储写入能力。
 
 - id: commit_high
   category: Commit
@@ -95,6 +124,11 @@
   metric: commit_pct_db_time
   condition:
     metric: commit_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 15}
+      OLAP: {op: ">=", value: 30}
+      Batch: {op: ">=", value: 25}
+      Mixed: {op: ">=", value: 20}
     op: ">="
     value: 20
   finding: Commit 等待占比过高
@@ -108,6 +142,11 @@
   metric: commit_pct_db_time
   condition:
     metric: commit_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 8}
+      OLAP: {op: ">=", value: 15}
+      Batch: {op: ">=", value: 15}
+      Mixed: {op: ">=", value: 10}
     op: ">="
     value: 10
   finding: Commit 等待偏高
@@ -115,18 +154,58 @@
   reason: 可能存在提交频率偏高或 redo 写入延迟。
   recommendation: 检查 log file sync 和 log file parallel write。
 
+# === Parse 规则 ===
+
 - id: parse_high
   category: Parse
   severity: WARNING
   metric: parse_time_pct_db_time
   condition:
     metric: parse_time_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 8}
+      OLAP: {op: ">=", value: 15}
+      Batch: {op: ">=", value: 15}
+      Mixed: {op: ">=", value: 10}
     op: ">="
     value: 10
   finding: SQL Parse 时间偏高
   description: SQL 解析消耗较明显。
   reason: 可能存在硬解析过多、绑定变量不足或游标共享问题。
   recommendation: 检查 Parse Calls、Hard Parses 和 SQL 绑定变量使用情况。
+
+- id: hard_parse_high
+  category: Parse
+  severity: HIGH
+  metric: hard_parses_per_sec
+  condition:
+    metric: hard_parses_per_sec
+    workload_thresholds:
+      OLTP: {op: ">=", value: 100}
+      OLAP: {op: ">=", value: 300}
+      Batch: {op: ">=", value: 300}
+      Mixed: {op: ">=", value: 200}
+    op: ">="
+    value: 200
+  finding: 硬解析极高
+  description: 每秒大量硬解析，严重影响 shared pool 和 CPU。
+  reason: 应用未使用绑定变量，或 shared pool 过小导致 SQL 被淘汰。
+  recommendation: 强制使用绑定变量；设置 cursor_sharing=FORCE 临时缓解；增大 shared_pool_size。
+
+- id: hard_parse_warning
+  category: Parse
+  severity: WARNING
+  metric: hard_parses_per_sec
+  condition:
+    metric: hard_parses_per_sec
+    op: ">="
+    value: 50
+  finding: 硬解析偏高
+  description: 硬解析频率偏高，可能影响性能。
+  reason: 可能存在部分 SQL 使用字面量而非绑定变量。
+  recommendation: 检查 V$SQLAREA 中 literal SQL；优化应用代码使用绑定变量。
+
+# === Memory/TEMP 规则 ===
 
 - id: memory_pressure
   category: Memory
@@ -147,6 +226,11 @@
   metric: temp_pct_db_time
   condition:
     metric: temp_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 5}
+      OLAP: {op: ">=", value: 15}
+      Batch: {op: ">=", value: 20}
+      Mixed: {op: ">=", value: 10}
     op: ">="
     value: 10
   finding: TEMP 表空间等待占比过高
@@ -167,12 +251,32 @@
   reason: 可能有 SQL 产生大量临时数据。
   recommendation: 检查 SQL ordered by Temp Usage；考虑优化排序操作或增大 PGA。
 
+- id: sort_spill_warning
+  category: Memory
+  severity: WARNING
+  metric: sorts_disk_per_sec
+  condition:
+    metric: sorts_disk_per_sec
+    op: ">="
+    value: 10
+  finding: 磁盘排序频繁
+  description: 排序操作频繁溢出到磁盘，说明 PGA 排序区不足。
+  reason: PGA_AGGREGATE_TARGET 偏小或存在超大排序操作。
+  recommendation: 增大 PGA；检查 Top SQL 的排序操作；优化 ORDER BY / GROUP BY / DISTINCT。
+
+# === Concurrency 规则 ===
+
 - id: latch_contention_high
   category: Concurrency
   severity: HIGH
   metric: latch_pct_db_time
   condition:
     metric: latch_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 5}
+      OLAP: {op: ">=", value: 15}
+      Batch: {op: ">=", value: 15}
+      Mixed: {op: ">=", value: 10}
     op: ">="
     value: 10
   finding: Latch 争用严重
@@ -192,6 +296,8 @@
   description: 有一定 Latch 等待，需关注。
   reason: 可能有并发访问热点。
   recommendation: 检查 V$LATCH 的 Miss% 和 Wait Time。
+
+# === RAC 规则 ===
 
 - id: rac_gc_high
   category: RAC
@@ -219,12 +325,19 @@
   reason: 可能有跨实例查询或热块跨节点争用。
   recommendation: 检查 Top Events 中的 gc 相关事件分布。
 
+# === Network 规则 ===
+
 - id: network_wait_high
   category: Network
   severity: WARNING
   metric: net_pct_db_time
   condition:
     metric: net_pct_db_time
+    workload_thresholds:
+      OLTP: {op: ">=", value: 5}
+      OLAP: {op: ">=", value: 10}
+      Batch: {op: ">=", value: 12}
+      Mixed: {op: ">=", value: 8}
     op: ">="
     value: 8
   finding: 网络等待偏高
@@ -232,31 +345,7 @@
   reason: 可能存在网络延迟、客户端处理慢（fetch 太少行）或 dblink 查询慢。
   recommendation: 检查 SQL*Net message 类事件；优化批量 fetch 大小（arraysize）；检查 dblink 目标库性能。
 
-- id: hard_parse_high
-  category: Parse
-  severity: HIGH
-  metric: hard_parses_per_sec
-  condition:
-    metric: hard_parses_per_sec
-    op: ">="
-    value: 200
-  finding: 硬解析极高
-  description: 每秒大量硬解析，严重影响 shared pool 和 CPU。
-  reason: 应用未使用绑定变量，或 shared pool 过小导致 SQL 被淘汰。
-  recommendation: 强制使用绑定变量；设置 cursor_sharing=FORCE 临时缓解；增大 shared_pool_size。
-
-- id: hard_parse_warning
-  category: Parse
-  severity: WARNING
-  metric: hard_parses_per_sec
-  condition:
-    metric: hard_parses_per_sec
-    op: ">="
-    value: 50
-  finding: 硬解析偏高
-  description: 硬解析频率偏高，可能影响性能。
-  reason: 可能存在部分 SQL 使用字面量而非绑定变量。
-  recommendation: 检查 V$SQLAREA 中 literal SQL；优化应用代码使用绑定变量。
+# === SQL 规则 ===
 
 - id: full_table_scans_high
   category: SQL
@@ -264,25 +353,17 @@
   metric: long_table_scans_per_sec
   condition:
     metric: long_table_scans_per_sec
+    workload_thresholds:
+      OLTP: {op: ">=", value: 50}
+      OLAP: {op: ">=", value: 200}
+      Batch: {op: ">=", value: 500}
+      Mixed: {op: ">=", value: 100}
     op: ">="
     value: 100
   finding: 长表全表扫描频繁
   description: 大表全表扫描次数过多，可能导致 I/O 和 CPU 压力。
   reason: 可能缺少索引、统计信息过期导致优化器选择全表扫描、或确实是报表类大范围查询。
   recommendation: 检查 SQL ordered by Reads；对 OLTP 查询添加合适索引；考虑分区表。
-
-- id: sort_spill_warning
-  category: Memory
-  severity: WARNING
-  metric: sorts_disk_per_sec
-  condition:
-    metric: sorts_disk_per_sec
-    op: ">="
-    value: 10
-  finding: 磁盘排序频繁
-  description: 排序操作频繁溢出到磁盘，说明 PGA 排序区不足。
-  reason: PGA_AGGREGATE_TARGET 偏小或存在超大排序操作。
-  recommendation: 增大 PGA；检查 Top SQL 的排序操作；优化 ORDER BY / GROUP BY / DISTINCT。
 
 - id: row_chaining_warning
   category: SQL
@@ -309,3 +390,832 @@
   description: user rollbacks / user commits 占比超过阈值，可能存在应用逻辑问题。
   reason: 应用频繁回滚事务，浪费数据库资源。
   recommendation: 检查应用回滚逻辑；是否因外键缺少索引导致 TM 锁等待后回滚。
+
+# ============================================================
+# 新增规则 (Phase 2)
+# ============================================================
+
+# === 复合规则：CPU + I/O ===
+
+- id: cpu_high_io_high
+  category: Composite
+  severity: HIGH
+  rule_group: storage_bottleneck
+  condition:
+    all:
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 40
+      - metric: user_io_pct_db_time
+        op: ">="
+        value: 15
+  finding: CPU 和 I/O 同时偏高，可能为存储瓶颈
+  description: CPU 等待和 User I/O 等待同时处于较高水平。
+  reason: CPU 偏高可能由 I/O 等待导致的会话堆积引起，也可能是大量物理读消耗 CPU。需要结合 Top Events 平均等待和 SQL 访问路径判断。
+  recommendation: 检查 db file sequential read / db file scattered read 平均等待是否 >10ms；如果是则为存储性能问题，否则为 SQL 工作量问题。
+
+# === 复合规则：硬解析 + Latch ===
+
+- id: hard_parse_latch
+  category: Composite
+  severity: WARNING
+  rule_group: shared_pool
+  condition:
+    all:
+      - any:
+        - metric: hard_parses_per_sec
+          op: ">="
+          value: 100
+        - metric: parse_time_pct_db_time
+          op: ">="
+          value: 10
+      - metric: latch_pct_db_time
+        op: ">="
+        value: 3
+  finding: 硬解析伴随 Latch 争用，共享池压力大
+  description: 高硬解析或 Parse 时间与 Latch 争用同时出现。
+  reason: 大量硬解析会导致 shared pool latch、library cache latch 争用，形成恶性循环。
+  recommendation: 绑定变量是根治方案；临时可用 cursor_sharing=FORCE；增大 shared_pool_size 缓解。
+
+# === 复合规则：TEMP + 全表扫描 ===
+
+- id: temp_scans
+  category: Composite
+  severity: WARNING
+  rule_group: missing_index
+  condition:
+    all:
+      - metric: temp_pct_db_time
+        op: ">="
+        value: 3
+      - metric: long_table_scans_per_sec
+        op: ">="
+        value: 10
+  finding: TEMP 压力伴随大量全表扫描，可能存在索引缺失
+  description: 排序/Hash 溢出到磁盘的同时大表全扫描频繁。
+  reason: 缺少索引导致全表扫描和排序/Hash 操作数据量过大，溢出到 TEMP。
+  recommendation: 检查 Top SQL 执行计划；对频繁扫描的大表添加合适的索引；考虑分区。
+
+# === 复合规则：Commit + log file sync ===
+
+- id: commit_logsync_high
+  category: Composite
+  severity: WARNING
+  rule_group: redo_bottleneck
+  condition:
+    all:
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 10
+      - metric: log_file_sync_avg_ms
+        op: ">="
+        value: 5
+  finding: Commit 等待偏高且 log file sync 延迟明显
+  description: Commit 等待占比高，同时 log file sync 平均等待超过 5ms。
+  reason: 频繁提交加上 redo 写入慢导致 Commit 等待放大。
+  recommendation: 检查应用提交频率（是否逐行 COMMIT）；优化 redo log 存储（使用 SSD/NVMe）；增大 log buffer。
+
+# === 复合规则：PGA + 磁盘排序 ===
+
+- id: pga_overflow_sort
+  category: Composite
+  severity: WARNING
+  rule_group: pga_insufficient
+  condition:
+    all:
+      - metric: pga_advisory_benefit_pct
+        op: ">="
+        value: 10
+      - metric: sorts_disk_per_sec
+        op: ">="
+        value: 5
+  finding: PGA Advisory 显示有改进空间且存在频繁磁盘排序
+  description: PGA Advisory 显示增大 PGA 可显著改善性能，同时磁盘排序频繁。
+  reason: PGA_AGGREGATE_TARGET 不足，排序/Hash 操作被迫溢出到磁盘。
+  recommendation: 增大 PGA_AGGREGATE_TARGET；检查 Top SQL 的排序操作和 ORDER BY/GROUP BY/DISTINCT。
+
+# === PGA/SGA Advisory 规则 ===
+
+- id: pga_advisory_suboptimal
+  category: Memory
+  severity: WARNING
+  metric: pga_advisory_benefit_pct
+  condition:
+    metric: pga_advisory_benefit_pct
+    op: ">="
+    value: 15
+  finding: PGA Advisory 显示增大 PGA 可显著改善性能
+  description: PGA Advisory 估计当前 PGA 配置不是最优。
+  reason: 当前 PGA_AGGREGATE_TARGET 可能偏小，增大后可减少磁盘排序和 TEMP 使用。
+  recommendation: 根据 PGA Advisory 建议的最优值增大 PGA_AGGREGATE_TARGET。
+
+- id: sga_advisory_suboptimal
+  category: Memory
+  severity: OBSERVE
+  metric: sga_advisory_benefit_pct
+  condition:
+    metric: sga_advisory_benefit_pct
+    op: ">="
+    value: 10
+  finding: SGA Advisory 显示增大 SGA 可改善性能
+  description: SGA Advisory 估计当前 SGA 配置有优化空间。
+  reason: 当前 SGA 大小可能导致 buffer cache 不足或 shared pool 频繁淘汰。
+  recommendation: 根据 SGA Advisory 建议的最优值增大 SGA_TARGET 或相关子组件。
+
+# === IO Stats 规则 ===
+
+- id: io_tablespace_hot_single
+  category: I/O
+  severity: WARNING
+  metric: io_stats_avg_read_latency_ms
+  condition:
+    metric: io_stats_avg_read_latency_ms
+    op: ">="
+    value: 15
+  finding: 存在表空间 I/O 读延迟过高的热点
+  description: 某些表空间的平均读延迟超过 15ms。
+  reason: 可能存在存储热点、I/O 分布不均或存储设备性能不足。
+  recommendation: 检查高延迟表空间的物理分布（是否在同一磁盘组）；考虑将热数据迁移到高性能存储；检查 ASM 冗余和条带化配置。
+
+- id: io_latency_across_ts
+  category: I/O
+  severity: OBSERVE
+  metric: io_stats_high_latency_count
+  condition:
+    metric: io_stats_high_latency_count
+    op: ">="
+    value: 3
+  finding: 多个表空间存在高 I/O 延迟
+  description: 超过 3 个表空间的读延迟超过 10ms。
+  reason: 整体存储层可能存在性能瓶颈，不仅仅是单个表空间的问题。
+  recommendation: 检查存储阵列整体负载；确认 ASM 磁盘组是否需要扩容或重新条带化。
+
+# === Instance Activity 规则 ===
+
+- id: session_logons_high
+  category: Application
+  severity: WARNING
+  metric: logons_per_sec
+  condition:
+    metric: logons_per_sec
+    op: ">="
+    value: 50
+  finding: 每秒登录次数过高（连接风暴）
+  description: 数据库连接创建频率异常高。
+  reason: 应用可能未使用连接池，或连接池配置不当导致频繁创建/销毁连接。
+  recommendation: 使用连接池（如 DRCP、WebLogic Pool、HikariCP）；检查连接泄漏；增大连接池大小。
+
+- id: redo_write_inefficient
+  category: Redo
+  severity: OBSERVE
+  metric: avg_redo_write_size
+  condition:
+    metric: avg_redo_write_size
+    op: "<="
+    value: 512
+  finding: Redo 写入平均大小过小
+  description: 每次 redo 写入的数据量很小，说明写入效率低。
+  reason: 可能存在频繁小事务提交，或 LGWR 被频繁唤醒但每次写入量很小。
+  recommendation: 检查应用提交频率；考虑批量提交减少 redo 写入次数；增大 log_buffer。
+
+- id: parse_ratio_mostly_hard
+  category: Parse
+  severity: WARNING
+  metric: parse_ratio_hard_pct
+  condition:
+    metric: parse_ratio_hard_pct
+    op: ">="
+    value: 30
+  finding: 硬解析占总解析比例过高
+  description: 超过 30% 的 SQL 解析是硬解析，说明绑定变量使用严重不足。
+  reason: 应用使用字面量 SQL，或 cursor sharing 设置不当。
+  recommendation: 使用绑定变量是根本方案；临时用 cursor_sharing=FORCE；增大 shared_pool_size。
+
+- id: execute_to_user_call_ratio
+  category: Application
+  severity: OBSERVE
+  condition:
+    all:
+      - metric: executes_per_sec
+        op: ">="
+        value: 5000
+      - metric: user_calls_per_sec
+        op: ">="
+        value: 5000
+  finding: SQL 执行和用户调用频率非常高
+  description: 数据库处理的 SQL 执行和用户调用数量非常多。
+  reason: 应用可能过于频繁地与数据库交互，缺少批量操作或缓存。
+  recommendation: 检查应用是否可以使用批量操作（FORALL、BULK COLLECT）；减少不必要的数据库调用；增加应用层缓存。
+
+- id: continued_row_high
+  category: Storage
+  severity: OBSERVE
+  metric: continued_row_per_sec
+  condition:
+    metric: continued_row_per_sec
+    op: ">="
+    value: 5000
+  finding: 行链接/迁移极其频繁
+  description: table fetch continued row 频率极高，严重拖慢查询性能。
+  reason: 表存在严重行链接或行迁移，每次访问需要额外 I/O。
+  recommendation: 对相关表执行 ALTER TABLE MOVE + REBUILD INDEX；检查 PCTFREE 设置；评估是否需要更大 block size。
+
+# === Segment 热点规则 ===
+
+- id: segment_scan_hot_single
+  category: SQL
+  severity: WARNING
+  metric: segment_scan_concentration_pct
+  condition:
+    metric: segment_scan_concentration_pct
+    op: ">="
+    value: 50
+  finding: 单一对象承载了大部分全表扫描
+  description: 某个对象占全表扫描总量的 50% 以上。
+  reason: 该对象可能缺少索引，或被 OLTP 查询以全表扫描方式访问。
+  recommendation: 检查该对象的 Top SQL；添加合适的索引；如果确实是报表需求，考虑分区或物化视图。
+
+# === 工作负载自适应规则 (覆盖关键指标) ===
+
+- id: aas_saturation
+  category: Load
+  severity: HIGH
+  condition:
+    all:
+      - metric: aas
+        workload_thresholds:
+          OLTP: {op: ">=", value: 8}
+          OLAP: {op: ">=", value: 16}
+          Batch: {op: ">=", value: 32}
+          Mixed: {op: ">=", value: 16}
+        op: ">="
+        value: 16
+      - metric: cpu_saturation_risk
+        op: "=="
+        value: 1
+  finding: 系统接近或已达到 CPU 饱和
+  description: AAS 超过阈值且 CPU 饱和风险标志已触发。
+  reason: 平均活跃会话数已超过 CPU 核数，系统处于过载状态，等待事件会显著放大。
+  recommendation: 优先降低 Top SQL 消耗；检查是否可以减少并发度；考虑扩容 CPU。
+
+- id: buffer_cache_hit_low
+  category: Memory
+  severity: WARNING
+  condition:
+    metric: session_logical_reads_per_sec
+    op: ">="
+    value: 10000
+  finding: Session Logical Reads 频率很高
+  description: 每秒逻辑读很高，需要确认 buffer cache 命中率。
+  reason: 高逻辑读可能表示 SQL 工作量大或 buffer cache 偏小导致频繁物理读。
+  recommendation: 检查 buffer cache hit ratio；如果命中率 < 95%，考虑增大 db_cache_size；检查 Top SQL 的 Gets/Exec。
+
+# === Redo pipeline 复合规则 ===
+
+- id: redo_pipeline_active
+  category: Redo
+  severity: WARNING
+  metric: log_file_sync_pct_db_time
+  condition:
+    metric: log_file_sync_pct_db_time
+    op: ">="
+    value: 5
+  finding: log file sync 等待偏高
+  description: log file sync 占 DB Time 5% 以上，需要关注。
+  reason: Redo 写入延迟可能由存储慢、log buffer 小或频繁提交导致。
+  recommendation: 检查 log file parallel write 延迟；优化 redo log 存储位置；检查应用提交频率。
+
+- id: log_sync_latency_high
+  category: Redo
+  severity: HIGH
+  metric: log_file_sync_avg_ms
+  condition:
+    metric: log_file_sync_avg_ms
+    op: ">="
+    value: 10
+  finding: log file sync 平均等待超过 10ms
+  description: log file sync 平均等待延迟很高，严重影响提交性能。
+  reason: Redo 日志存储可能位于慢速磁盘，或存在 I/O 争用。
+  recommendation: 将 redo log 迁移到 SSD/NVMe 存储；增加 redo log 组数量；检查 LGWR 进程。
+
+# === Instance Efficiency 规则 ===
+
+- id: buffer_hit_low
+  category: Memory
+  severity: WARNING
+  metric: buffer_hit_ratio
+  condition:
+    metric: buffer_hit_ratio
+    op: "<"
+    value: 95
+  finding: Buffer Cache 命中率偏低
+  description: Buffer Hit Ratio < 95%，数据库频繁从磁盘读取数据块。
+  reason: Buffer Cache 可能偏小，或存在大量全表扫描绕过缓存。
+  recommendation: 增大 db_cache_size；检查 Top SQL 是否有大量全表扫描；检查 db_file_multiblock_read_count。
+
+- id: library_cache_hit_low
+  category: Parse
+  severity: WARNING
+  metric: library_cache_hit_ratio
+  condition:
+    metric: library_cache_hit_ratio
+    op: "<"
+    value: 95
+  finding: Library Cache 命中率偏低
+  description: Library Cache 命中率低于 95%，可能存在共享池压力。
+  reason: 硬解析过多或 shared_pool_size 偏小导致 SQL 被淘汰出共享池。
+  recommendation: 使用绑定变量减少硬解析；增大 shared_pool_size；检查 cursor_sharing 参数。
+
+- id: dict_hit_low
+  category: Memory
+  severity: OBSERVE
+  metric: dict_hit_ratio
+  condition:
+    metric: dict_hit_ratio
+    op: "<"
+    value: 90
+  finding: Dictionary Cache 命中率偏低
+  description: 数据字典缓存命中率低于 90%。
+  reason: Shared pool 偏小或大量 DDL 操作导致字典缓存频繁淘汰。
+  recommendation: 增大 shared_pool_size；检查是否有频繁 DDL 或大量新建对象。
+
+- id: soft_parse_low
+  category: Parse
+  severity: WARNING
+  metric: soft_parse_ratio
+  condition:
+    metric: soft_parse_ratio
+    op: "<"
+    value: 80
+  finding: 软解析比例偏低
+  description: Soft Parse Ratio < 80%，说明大量 SQL 未命中共享池需要硬解析。
+  reason: 应用未使用绑定变量或 session_cached_cursors 设置过小。
+  recommendation: 使用绑定变量；增大 session_cached_cursors；检查 shared_pool_size。
+
+- id: in_memory_sort_low
+  category: Memory
+  severity: WARNING
+  metric: in_memory_sort_ratio
+  condition:
+    metric: in_memory_sort_ratio
+    op: "<"
+    value: 95
+  finding: 内存排序比例偏低
+  description: 大量排序操作溢出到磁盘，说明 PGA sort area 不足。
+  reason: PGA_AGGREGATE_TARGET 偏小或存在超大排序操作。
+  recommendation: 增大 PGA_AGGREGATE_TARGET；检查 Top SQL 的 ORDER BY/GROUP BY/DISTINCT 操作。
+
+- id: latch_hit_low
+  category: Concurrency
+  severity: WARNING
+  metric: latch_hit_ratio
+  condition:
+    metric: latch_hit_ratio
+    op: "<"
+    value: 99
+  finding: Latch 命中率偏低
+  description: Latch Hit Ratio < 99%，存在 latch 争用。
+  reason: 高并发访问热点数据块或共享池。
+  recommendation: 检查 Top Latch；热块问题考虑 hash 分区或反向索引。
+
+# ============================================================
+# 专家经验规则集：真实生产案例（v2.1 新增 30 条）
+# ============================================================
+
+# === 绑定变量 & 硬解析 ===
+
+- id: bind_peeking_instability
+  category: SQL
+  severity: HIGH
+  metric: hard_parses_per_sec
+  condition:
+    all:
+      - metric: hard_parses_per_sec
+        op: ">="
+        value: 100
+      - metric: buffer_hit_ratio
+        op: "<"
+        value: 90
+  finding: 硬解析极高且缓存命中率低，存在绑定变量问题
+  description: 高硬解析率结合低缓存命中率，说明 SQL 未使用绑定变量。
+  reason: 应用使用字符串拼接构造 SQL 导致大量 unique SQL 被硬解析，shared pool 压力巨大。
+  recommendation: 检查 V$SQL 中同一结构但 SQL_ID 不同的 SQL 数量；使用 SQL Monitor 对比执行计划；设置 cursor_sharing=FORCE 临时缓解；应用层改用绑定变量。
+
+- id: sql_injection_pattern
+  category: SQL
+  severity: HIGH
+  condition:
+    metric: hard_parses_per_sec
+    op: ">="
+    value: 500
+  finding: 硬解析风暴，疑似 SQL 注入或动态拼接
+  description: 硬解析率超过 500/s，shared pool 可能面临耗尽风险。
+  reason: 大量唯一 SQL 语句被硬解析，可能来自 SQL 注入攻击或应用层字符串拼接。
+  recommendation: 立即检查 V$SQL 的 SQL_TEXT 前 100 字符统计唯一值数量；使用绑定变量是根本解决方案；临时设置 cursor_sharing=FORCE；增大 shared_pool_size 缓解压力。
+
+# === Commit 模式 ===
+
+- id: spring_auto_commit
+  category: Commit
+  severity: HIGH
+  condition:
+    all:
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 20
+      - metric: commits_per_sec
+        op: ">="
+        value: 1000
+      - metric: avg_redo_write_size
+        op: "<"
+        value: 512
+  finding: 频繁提交 + 小事务量，疑似 Java/Spring autoCommit
+  description: commits 极高但每次 redo 大小很小，说明每条 SQL 后都有提交。
+  reason: Java/Spring JDBC 默认 autoCommit=true，每条语句后立即提交，导致 log file sync 风暴。
+  recommendation: 检查应用 JDBC 连接是否关闭 autoCommit；使用 @Transactional 注解控制事务边界；批量提交（每 1000-10000 行 COMMIT 一次）；将 redo log 移到 SSD。
+
+# === 锁 & 并发 ===
+
+- id: foreign_key_missing_index
+  category: Concurrency
+  severity: HIGH
+  condition:
+    metric: enq_tm_contention_pct_db_time
+    op: ">="
+    value: 5
+  finding: TM 锁争用，可能是外键缺失索引
+  description: enq TM contention 等待显著。
+  reason: 子表外键列无索引，删除/更新父表行时锁定整个子表。
+  recommendation: 检查所有外键是否有索引：SELECT owner, table_name, constraint_name FROM all_constraints WHERE constraint_type='R'；缺失索引的立即创建；这是最常见锁争用的根因之一。
+
+- id: sequence_contention
+  category: Concurrency
+  severity: HIGH
+  condition:
+    all:
+      - metric: enq_sq_contention_pct_db_time
+        op: ">="
+        value: 2
+      - metric: hard_parses_per_sec
+        op: ">="
+        value: 50
+  finding: Sequence 争用导致 shared pool latch 争用
+  description: 大量 sequence 生成的场景出现序列相关等待。
+  reason: Sequence Cache 默认只有 20，高并发场景下跨实例争用剧烈。
+  recommendation: 增大 Sequence Cache：ALTER SEQUENCE seq_name CACHE 10000；RAC 环境必须 CACHE + NOORDER；12c+ 考虑使用 IDENTITY 列替代 Sequence。
+
+- id: tx_row_lock_contention
+  category: Concurrency
+  severity: WARNING
+  condition:
+    metric: enq_tx_row_lock_pct_db_time
+    op: ">="
+    value: 3
+  finding: TX 行锁争用
+  description: 存在行级锁竞争。
+  reason: 长事务持有锁、多事务更新同一行、应用未正确提交/回滚。
+  recommendation: 检查 V$SESSION 中 blocking_session 和 event；检查长事务的 START_TIME；优化事务粒度；使用 SELECT ... FOR UPDATE SKIP LOCKED。
+
+- id: cursor_leak
+  category: Concurrency
+  severity: HIGH
+  condition:
+    metric: session_cached_cursors_pct
+    op: ">="
+    value: 90
+  finding: session_cached_cursors 使用率 > 90%，疑似游标泄漏
+  description: 游标缓存使用率高，说明应用未关闭游标。
+  reason: 应用未正确关闭 ResultSet/PreparedStatement，导致游标累积，最终 ORA-01000。
+  recommendation: 检查 V$OPEN_CURSOR 按 SID 统计；应用代码检查关闭逻辑；增大 OPEN_CURSORS 参数（临时）；检查 PL/SQL 动态 SQL 是否在循环中未关闭。
+
+# === 内存 & PGA ===
+
+- id: pga_aggregation_insufficient
+  category: Memory
+  severity: HIGH
+  condition:
+    any:
+      - metric: pga_advisory_benefit_pct
+        op: ">="
+        value: 15
+      - all:
+          - metric: sorts_disk_per_sec
+            op: ">="
+            value: 10
+          - metric: temp_pct_db_time
+            op: ">="
+            value: 5
+  finding: PGA Advisory 显示增大 PGA 可显著减少磁盘排序
+  description: PGA 当前设置不足，大量排序溢出到 temp 表空间。
+  reason: PGA_AGGREGATE_TARGET 偏小，导致 sort area 不足。
+  recommendation: 增大 PGA_AGGREGATE_TARGET 到 Advisory 建议值；检查 Top SQL 是否有大 ORDER BY/GROUP BY/DISTINCT；优化 SQL 减少排序数据量。
+
+- id: sga_buffer_cache_small
+  category: Memory
+  severity: WARNING
+  condition:
+    all:
+      - metric: buffer_hit_ratio
+        op: "<"
+        value: 95
+      - metric: physical_read_blocks_per_sec
+        op: ">="
+        value: 30000
+  finding: Buffer Cache 命中率低且物理读高
+  description: 数据库频繁访问磁盘，缓存效率低。
+  reason: Buffer Cache 偏小，或存在全表扫描频繁冲刷缓存。
+  recommendation: 增大 db_cache_size；使用 KEEP buffer pool 隔离热表；检查全表扫描的 SQL；使用 Buffer Cache Advisory 确定最优大小。
+
+# === I/O & 存储 ===
+
+- id: storage_io_latency_high
+  category: I/O
+  severity: HIGH
+  condition:
+    any:
+      - metric: db_file_sequential_read_avg_ms
+        op: ">="
+        value: 10
+      - metric: log_file_parallel_write_avg_ms
+        op: ">="
+        value: 5
+  finding: 存储 I/O 延迟过高
+  description: 单块读或日志写入延迟超过阈值。
+  reason: 存储响应慢、共享存储争用、或 I/O 调度策略不当。
+  recommendation: 检查 iostat 的 await 值；分离 redo log 和 datafile 到不同磁盘；使用 SSD/NVMe；检查 ASM 的 AU_SIZE 和条带化；云环境升级 IOPS 配额。
+
+- id: dbwr_slow
+  category: I/O
+  severity: HIGH
+  condition:
+    metric: free_buffer_waits_pct_db_time
+    op: ">="
+    value: 5
+  finding: Free Buffer Waits 等待，说明 DBWR 跟不上脏块产生速度
+  description: DBWR 写出能力不足。
+  reason: 脏块产生速度超过 DBWR 写出速度，导致前台进程等待空闲 buffer。
+  recommendation: 增加 DBWR 进程数：db_writer_processes；启用异步 I/O：filesystemio_options=SETALL；增大 DB_CACHE_SIZE 减少写频率；检查存储写能力。
+
+- id: hash_join_temp_spill
+  category: SQL
+  severity: WARNING
+  condition:
+    all:
+      - metric: direct_path_read_temp_pct_db_time
+        op: ">="
+        value: 5
+      - metric: direct_path_write_temp_pct_db_time
+        op: ">="
+        value: 3
+  finding: Hash Join 溢出到 TEMP 导致 I/O 放大
+  description: 排序/哈希操作溢出到临时表空间。
+  reason: 大表之间的 Hash Join PGA 内存不足。
+  recommendation: 增大 PGA_AGGREGATE_TARGET；检查 Hash Join 的驱动表选择（小表驱动）；使用 /*+ USE_HASH */ hint 控制；考虑分区 Join。
+
+# === 分区 & 统计 ===
+
+- id: partition_prune_failure
+  category: SQL
+  severity: WARNING
+  condition:
+    any:
+      - metric: partition_all_count
+        op: ">="
+        value: 1
+      - all:
+          - metric: physical_read_blocks_per_sec
+            op: ">="
+            value: 50000
+          - metric: table_scan_pk_count
+            op: ">="
+            value: 3
+  finding: 分区裁剪失效导致全分区扫描
+  description: SQL 访问分区表但未触发分区裁剪。
+  reason: 分区键使用函数（TO_DATE/TO_CHAR）或类型不匹配，导致 PARTITION ALL。
+  recommendation: 检查 SQL WHERE 条件是否在分区键上使用了函数；使用 EXPLAIN PLAN 查看 Pstart/Pstop 列；修正分区键的比较方式；考虑使用虚拟列分区。
+
+- id: stats_outdated
+  category: SQL
+  severity: HIGH
+  condition:
+    any:
+      - metric: plan_change_sql_count
+        op: ">="
+        value: 3
+      - all:
+          - metric: db_cpu_pct_db_time
+            op: ">="
+            value: 60
+          - metric: soft_parse_ratio
+            op: "<"
+            value: 70
+  finding: 多个 SQL 执行计划同时变化，疑似统计信息过期
+  description: 统计信息可能已经过时，导致执行计划恶化。
+  reason: 自动统计信息收集后新统计信息导致计划变化；统计信息过期导致优化器估算错误。
+  recommendation: 检查 DBA_TAB_STATISTICS 的 LAST_ANALYZED；锁定关键表统计信息：DBMS_STATS.LOCK_TABLE_STATS；使用 SQL Plan Baseline 固定好的计划；调整统计信息收集窗口避开业务高峰。
+
+- id: implicit_type_conversion
+  category: SQL
+  severity: WARNING
+  condition:
+    any:
+      - metric: sql_with_type_conversion_count
+        op: ">="
+        value: 1
+      - all:
+          - metric: logical_read_blocks_per_sec
+            op: ">="
+            value: 100000
+          - metric: buffer_hit_ratio
+            op: "<"
+            value: 90
+  finding: 疑似隐式类型转换导致索引失效
+  description: SQL 中使用了字符串与数字列的比较，导致索引无法使用。
+  reason: WHERE num_col = '123' 会被隐式转换为 TO_NUMBER()，导致全表扫描。
+  recommendation: 检查 SQL 文本中是否有引号数字；修正为匹配数据类型；使用函数索引作为过渡方案；检查 V$SQL_PLAN 的 ACCESS_PREDICATES。
+
+# === RAC ===
+
+- id: rac_gc_bottleneck
+  category: RAC
+  severity: HIGH
+  condition:
+    any:
+      - metric: gc_buffer_busy_pct_db_time
+        op: ">="
+        value: 10
+      - metric: gc_cr_multi_pct_db_time
+        op: ">="
+        value: 8
+  finding: RAC 全局缓存网络瓶颈
+  description: 跨实例缓存争用显著。
+  reason: 数据热点分布不均、Interconnect 带宽不足、或 Sequence 跨实例争用。
+  recommendation: 检查 V$CLUSTER_INTERCONNECTS 的带宽和延迟；使用 Service 绑定将关联业务固定到同一实例；增大 Sequence Cache；使用 Hash Partition 分散热块；考虑反向索引。
+
+- id: rac_instance_imbalance
+  category: RAC
+  severity: WARNING
+  condition:
+    metric: instance_load_imbalance_ratio
+    op: ">="
+    value: 2.0
+  finding: RAC 实例间负载严重不均衡
+  description: 各实例的 DB Time/AAS 差异超过 2 倍。
+  reason: Service 配置不合理、某些实例承担过多负载、或数据分布不均。
+  recommendation: 检查各实例的 AAS/DB Time；调整 Service 配置将负载均衡分布；使用 Resource Manager 控制实例优先级；检查数据分区策略。
+
+# === Undo & Redo ===
+
+- id: long_transaction_undo
+  category: Memory
+  severity: HIGH
+  condition:
+    any:
+      - metric: undo_retention_violations_count
+        op: ">="
+        value: 1
+      - metric: ora_01555_count
+        op: ">="
+        value: 1
+  finding: 存在长事务导致的 Undo 问题
+  description: 出现 ORA-01555 或 Undo 保留期违规。
+  reason: 长事务读取旧数据但 Undo 已被覆盖；Undo 表空间不足；延迟清除块延迟。
+  recommendation: 增大 UNDO_TABLESPACE 和 UNDO_RETENTION；应用层拆分大事务（每批 COMMIT）；使用 Guaranteed Undo Retention；检查 V$TRANSACTION 中的长事务；检查 LOB 列的 RETENTION 设置。
+
+- id: redo_switch_storm
+  category: Redo
+  severity: HIGH
+  condition:
+    any:
+      - metric: log_file_switch_checkpoint_incomplete_pct_db_time
+        op: ">="
+        value: 5
+      - all:
+          - metric: checkpoint_incomplete_pct_db_time
+            op: ">="
+            value: 3
+          - metric: log_file_sync_pct_db_time
+            op: ">="
+            value: 10
+  finding: Redo log 切换风暴
+  description: 日志切换过于频繁或 checkpoint 不完整。
+  reason: Redo log 文件过小、DBWR 写出能力不足、或存储 I/O 慢。
+  recommendation: 增大 redo log 文件到 1-4GB；增加 redo log 组数量（至少 3 组）；检查归档是否跟上；优化 DBWR；检查 FAST_START_MTTR_TARGET 设置。
+
+# === 并行 & PQ ===
+
+- id: parallel_query_abuse
+  category: CPU
+  severity: HIGH
+  condition:
+    all:
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 50
+      - metric: px_deq_credit_send_blkd_pct_db_time
+        op: ">="
+        value: 3
+  finding: 并行查询 CPU 风暴，疑似并行度滥用
+  description: 并行查询消耗大量 CPU。
+  reason: OLTP 系统误用 parallel hint，或 parallel_max_servers 设置过高。
+  recommendation: 对 OLTP 系统禁用并行：ALTER TABLE ... NOPARALLEL；设置 parallel_max_servers 限制最大并行度；使用 Resource Manager 限制批处理的并行度；检查应用 SQL 是否含有不必要的 PARALLEL hint。
+
+- id: direct_path_read_bypass_cache
+  category: I/O
+  severity: WARNING
+  condition:
+    metric: direct_path_read_pct_db_time
+    op: ">="
+    value: 20
+  finding: 直接路径读绕过 Buffer Cache 比例过高
+  description: 大量直接路径读绕过缓存。
+  reason: 并行查询、Table Fierce Scan、11g+ _serial_direct_read=auto 导致。
+  recommendation: 检查是否是并行查询引起；检查 _serial_direct_read 参数（可设为 FALSE 禁用自动直接路径读）；对中小表查询禁用并行；使用缓存表减少直接路径读。
+
+# === 12c/19c/21c 新特性 ===
+
+- id: adaptive_statistics_instability
+  category: SQL
+  severity: WARNING
+  condition:
+    any:
+      - metric: reoptimization_count
+        op: ">="
+        value: 3
+      - metric: sql_plan_directives_active_count
+        op: ">="
+        value: 10
+  finding: 自适应统计信息导致执行计划不稳定
+  description: 12c+ 数据库存在执行计划频繁重新优化。
+  reason: Adaptive Cursor Sharing、SQL Plan Directives 动态采样导致计划变化。
+  recommendation: 检查 V$SQL 的 IS_REOPTIMIZABLE 和 IS_BIND_SENSITIVE；使用 SQL Plan Baseline 固定好的计划；对关键 SQL 设置 OPTIMIZER_FEATURES_ENABLE；考虑关闭自适应统计：optimizer_adaptive_statistics=FALSE。
+
+- id: adg_apply_lag
+  category: RAC
+  severity: WARNING
+  condition:
+    metric: adg_apply_lag_seconds
+    op: ">="
+    value: 60
+  finding: ADG 备库 apply lag 超过 60 秒
+  description: Data Guard 备库_apply 延迟过高。
+  reason: 网络传输慢、备库资源不足、或归档日志积压。
+  recommendation: 检查 V$ARCHIVE_DEST_STATUS 的 APPLIED_SCN；增大备库并行 apply 进程：ALTER DATABASE RECOVER MANAGED STANDBY DATABASE PARALLEL 8；检查网络带宽；使用 Far Sync 减少传输延迟。
+
+# === 综合评估规则 ===
+
+- id: top_sql_n1_pattern
+  category: SQL
+  severity: WARNING
+  condition:
+    metric: n1_pattern_sql_count
+    op: ">="
+    value: 3
+  finding: 存在 N+1 查询模式
+  description: 多个 SQL 结构相同但绑定变量不同，疑似 N+1 查询。
+  reason: 应用在循环中逐条查询数据库，而非批量获取。
+  recommendation: 改写为批量查询（IN 子句或 JOIN）；PL/SQL 使用 BULK COLLECT / FORALL；考虑物化视图或缓存层；使用批量接口替代循环查询。
+
+- id: top_sql_plan_change
+  category: SQL
+  severity: HIGH
+  condition:
+    metric: plan_change_sql_count
+    op: ">="
+    value: 1
+  finding: Top SQL 存在执行计划变化
+  description: 某 SQL 的执行计划与历史记录不一致。
+  reason: 统计信息变化、绑定变量窥探、执行计划漂移。
+  recommendation: 对比新旧执行计划：V$SQL_PLAN / DBA_HIST_SQL_PLAN；使用 SQL Plan Baseline 固定最优计划；检查 IS_BIND_AWARE 状态；使用 DBMS_SQLTUNE 调优该 SQL。
+
+- id: high_concurrency_latch
+  category: Concurrency
+  severity: WARNING
+  condition:
+    all:
+      - metric: latch_hit_ratio
+        op: "<"
+        value: 98
+      - metric: aas
+        op: ">="
+        value: 10
+  finding: 高并发下 Latch 命中率下降
+  description: 高负载时 Latch 争用加剧。
+  reason: 热块争用、shared pool 碎片化、或高并发访问相同数据。
+  recommendation: 检查 Top Latch 类型；热块问题使用 hash 分区或反向索引；使用绑定变量减少 SQL 解析；增大 shared_pool_size。
+
+- id: system_overall_critical
+  category: System
+  severity: HIGH
+  condition:
+    all:
+      - metric: aas
+        op: ">="
+        value: 50
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 50
+  finding: 系统整体处于过载状态
+  description: AAS > 50 且 CPU 占 DB Time 超过 50%，系统过载。
+  reason: 并发请求远超系统处理能力。
+  recommendation: 立即扩容：增加 CPU/内存；使用 Resource Manager 降级非关键负载；将批处理迁移到低峰时段；启用连接池限制并发；横向扩展读负载到 ADG。

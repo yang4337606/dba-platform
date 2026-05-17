@@ -1,3 +1,5 @@
+import re
+
 from app.analyzers.oracle_awr.event_semantics import classify_event_semantics
 
 
@@ -56,6 +58,9 @@ def extract_awr_metrics(parsed_data):
     metrics["top_sql_gets"] = parsed_data.get("top_sql_gets", [])
     metrics["top_sql_reads"] = parsed_data.get("top_sql_reads", [])
     metrics["top_sql_behaviors"] = classify_top_sql_behaviors(metrics)
+    metrics["sql_plan_statistics"] = parsed_data.get("sql_plan_statistics", {})
+    metrics["execution_plans"] = parsed_data.get("execution_plans", {})
+    metrics["sql_plan_baselines"] = parsed_data.get("sql_plan_baselines", [])
     metrics["load_profile"] = load_profile
     metrics["instance_efficiency"] = parsed_data.get("instance_efficiency", {})
     metrics["io_stats"] = parsed_data.get("io_stats", [])
@@ -127,6 +132,133 @@ def extract_awr_metrics(parsed_data):
         if "direct path" in str(evt.get("event", "")).lower() and "temp" in str(evt.get("event", "")).lower()
     )
     metrics["temp_pct_db_time"] = round(temp_time_s * 100 / (total_time_s or 1), 1) if temp_time_s else 0
+
+    # --- Phase 1: Activate previously unused parsed data ---
+
+    # PGA/SGA Advisory derived metrics
+    pga_adv = parse_pga_sga_advisory(parsed_data.get("pga_advisory", []), "pga")
+    sga_adv = parse_pga_sga_advisory(parsed_data.get("sga_advisory", []), "sga")
+    metrics["pga_advisory_benefit_pct"] = pga_adv.get("benefit_pct", 0)
+    metrics["pga_advisory_current_mb"] = pga_adv.get("current_mb", 0)
+    metrics["pga_advisory_estimated_optimal_mb"] = pga_adv.get("optimal_mb", 0)
+    metrics["sga_advisory_benefit_pct"] = sga_adv.get("benefit_pct", 0)
+    metrics["sga_advisory_current_mb"] = sga_adv.get("current_mb", 0)
+    metrics["sga_advisory_estimated_optimal_mb"] = sga_adv.get("optimal_mb", 0)
+
+    # IO Stats by tablespace
+    io_analysis = analyze_io_stats(parsed_data.get("io_stats", []))
+    metrics["io_stats_hot_tablespace"] = io_analysis.get("hot_tablespace", "")
+    metrics["io_stats_avg_read_latency_ms"] = io_analysis.get("avg_read_latency_ms", 0)
+    metrics["io_stats_avg_write_latency_ms"] = io_analysis.get("avg_write_latency_ms", 0)
+    metrics["io_stats_high_latency_count"] = io_analysis.get("high_latency_count", 0)
+    metrics["io_stats_high_latency_tablespaces"] = io_analysis.get("high_latency_tablespaces", [])
+
+    # Foreground Wait Class
+    fg_metrics = extract_foreground_metrics(parsed_data.get("foreground_wait_class", []))
+    metrics["foreground_db_cpu_pct"] = fg_metrics.get("db_cpu_pct", 0)
+    metrics["fg_top_wait_class"] = fg_metrics.get("top_wait_class", "")
+    metrics["fg_top_wait_pct"] = fg_metrics.get("top_wait_pct", 0)
+
+    # More Instance Activity derived metrics
+    parse_total = find_instance_activity(instance_activity, "parse count (total)", "per_second")
+    metrics["parse_total_per_sec"] = parse_total
+    hard = metrics.get("hard_parses_per_sec", 0) or 0
+    metrics["parse_ratio_hard_pct"] = round(hard * 100 / (parse_total or 1), 1) if parse_total else 0
+    metrics["logons_per_sec"] = find_instance_activity(instance_activity, "logons cumulative", "per_second")
+    metrics["open_cursors_per_sec"] = find_instance_activity(instance_activity, "opened cursors cumulative", "per_second")
+    metrics["session_logical_reads_per_sec"] = find_instance_activity(instance_activity, "session logical reads", "per_second")
+    metrics["physical_reads_per_sec"] = find_instance_activity(instance_activity, "physical reads", "per_second")
+    redo_writes = find_instance_activity(instance_activity, "redo writes", "per_second")
+    metrics["redo_writes_per_sec"] = redo_writes
+    redo_size = metrics.get("redo_size_per_sec", 0) or 0
+    metrics["avg_redo_write_size"] = round(redo_size / (redo_writes or 1)) if redo_writes else 0
+
+    # Segment physical reads and table scans concentration
+    seg_phys = parsed_data.get("segments_physical_reads", [])
+    seg_scans = parsed_data.get("segments_table_scans", [])
+    metrics["segments_physical_reads_top3"] = [
+        {"owner": s.get("owner", ""), "object_name": s.get("object_name", ""), "pct_total": s.get("pct_total", 0)}
+        for s in (seg_phys or [])[:3]
+    ]
+    metrics["segments_table_scans_top3"] = [
+        {"owner": s.get("owner", ""), "object_name": s.get("object_name", ""), "pct_total": s.get("pct_total", 0)}
+        for s in (seg_scans or [])[:3]
+    ]
+    top_scan_pct = safe_float((seg_scans[0].get("pct_total", 0) if seg_scans else 0))
+    metrics["segment_scan_concentration_pct"] = top_scan_pct
+
+    # Count segments with table scans > 0 (for partition prune failure rule)
+    metrics["table_scan_pk_count"] = sum(1 for s in (seg_scans or []) if safe_float(s.get("metric_value", 0)) > 10)
+
+    # Instance Efficiency derived metrics
+    ie = parsed_data.get("instance_efficiency", {})
+    metrics["buffer_hit_ratio"] = _extract_efficiency_pct(ie, ["Buffer Hit", "Buffer Nowait", "buffer pool hit"])
+    metrics["library_cache_hit_ratio"] = _extract_efficiency_pct(ie, ["Library Hit", "Library Cache Hit", "library cache hit"])
+    metrics["dict_hit_ratio"] = _extract_efficiency_pct(ie, ["Dictionary Hit", "dict cache hit", "Row Cache Hit"])
+    metrics["latch_hit_ratio"] = _extract_efficiency_pct(ie, ["Latch Hit", "latch hit"])
+    metrics["soft_parse_ratio"] = _extract_efficiency_pct(ie, ["Soft Parse", "soft parse"])
+    metrics["in_memory_sort_ratio"] = _extract_efficiency_pct(ie, ["In-memory Sort", "In-Memory Sort", "sorts (memory)"])
+    metrics["execute_without_parse_ratio"] = _extract_efficiency_pct(ie, ["Execute to Parse", "Non-Parse CPU"])
+    metrics["redo_nowait_ratio"] = _extract_efficiency_pct(ie, ["Redo NoWait", "redo nowait"])
+    metrics["non_parse_cpu_ratio"] = _extract_efficiency_pct(ie, ["Non-Parse CPU"])
+
+    # ============================================================
+    # Phase 2: Extract metrics referenced by rules.yaml
+    # These were previously missing, causing silent rule failures
+    # ============================================================
+
+    # --- Top Events derived: specific wait event percentages ---
+    metrics["db_file_sequential_read_avg_ms"] = find_event_value(top_events, "db file sequential read", "avg_wait_ms")
+    metrics["log_file_parallel_write_avg_ms"] = find_event_value(top_events, "log file parallel write", "avg_wait_ms")
+    metrics["direct_path_read_pct_db_time"] = find_pct(top_events, ["direct path read"])
+    metrics["direct_path_read_temp_pct_db_time"] = find_pct(top_events, ["direct path read temp"])
+    metrics["direct_path_write_temp_pct_db_time"] = find_pct(top_events, ["direct path write temp"])
+    metrics["free_buffer_waits_pct_db_time"] = find_pct(top_events, ["free buffer waits"])
+    metrics["px_deq_credit_send_blkd_pct_db_time"] = find_pct(top_events, ["px deq credit: send blkd"])
+    metrics["checkpoint_incomplete_pct_db_time"] = find_pct(top_events, ["checkpoint incomplete", "log file switch (checkpoint incomplete)"])
+
+    # --- Enqueue (lock) contention percentages ---
+    metrics["enq_tm_contention_pct_db_time"] = find_pct(top_events, ["enq: tm - contention"])
+    metrics["enq_tx_row_lock_pct_db_time"] = find_pct(top_events, ["enq: tx - row lock contention"])
+    metrics["enq_sq_contention_pct_db_time"] = find_pct(top_events, ["enq: sq - contention"])
+
+    # --- RAC GC specific ---
+    metrics["gc_buffer_busy_pct_db_time"] = find_pct(top_events, ["gc buffer busy"])
+    metrics["gc_cr_multi_pct_db_time"] = find_pct(top_events, ["gc cr multi block request", "gc cr block"])
+
+    # --- Instance Activity derived: counts and rates ---
+    metrics["n1_pattern_sql_count"] = 0  # Computed later from behaviors
+    metrics["plan_change_sql_count"] = 0  # Computed later from plan analysis
+    metrics["partition_all_count"] = 0  # Computed from execution plans
+    metrics["table_scan_pk_count"] = 0  # Computed from segment data
+    metrics["sql_with_type_conversion_count"] = 0  # Computed from SQL text analysis
+
+    # Session cursor cache usage (for cursor leak detection)
+    session_cached_cursors = find_instance_activity(instance_activity, "session cursor cache hits", "per_second")
+    session_cache_count = find_instance_activity(instance_activity, "session cursor cache count", "total")
+    metrics["session_cached_cursors_pct"] = 0  # Requires OPEN_CURSORS param which is not in AWR
+
+    # Undo retention violations
+    metrics["undo_retention_violations_count"] = find_instance_activity(instance_activity, "undo change vector size", "total")
+    # ORA-01555 count (snapshot too old)
+    ora_1555 = 0
+    for row in top_events:
+        if "snapshot too old" in str(row.get("event", "")).lower() or "01555" in str(row.get("event", "")).lower():
+            ora_1555 += 1
+    metrics["ora_01555_count"] = ora_1555
+
+    # ADG apply lag (if available from event or instance activity)
+    metrics["adg_apply_lag_seconds"] = 0  # Requires specific AWR sections not always present
+
+    # RAC instance load imbalance
+    metrics["instance_load_imbalance_ratio"] = 0  # Requires multi-instance data
+
+    # 12c+ adaptive statistics indicators
+    metrics["reoptimization_count"] = find_instance_activity(instance_activity, "reoptimized sql", "total")
+    metrics["sql_plan_directives_active_count"] = 0  # Requires DBA_SQL_PLAN_DIRECTIVES, not in AWR
+
+    # --- Compute derived metrics from behaviors (populated after classify_top_sql_behaviors) ---
+    # These are set to 0 here and computed in classify_top_sql_behaviors
 
     return metrics
 
@@ -336,7 +468,7 @@ def classify_top_sql_behaviors(metrics):
         ("高逻辑读 SQL", metrics.get("top_sql_gets", [])),
         ("高物理读 SQL", metrics.get("top_sql_reads", [])),
     ):
-        for row in rows[:5]:
+        for row in rows[:10]:
             sql_id = row.get("sql_id")
             if not sql_id:
                 continue
@@ -344,20 +476,356 @@ def classify_top_sql_behaviors(metrics):
             if key in seen:
                 continue
             seen.add(key)
-            behaviors.append(
-                {
-                    "sql_id": sql_id,
-                    "category": category,
-                    "elapsed_time": row.get("elapsed_time"),
-                    "cpu_time": row.get("cpu_time"),
-                    "buffer_gets": row.get("buffer_gets"),
-                    "physical_reads": row.get("physical_reads"),
-                    "executions": row.get("executions"),
-                    "sql_text": row.get("sql_text", ""),
-                    "reason": describe_sql_behavior(category, row),
-                }
-            )
+            text = row.get("sql_text", "")
+            text_analysis = analyze_sql_text(text)
+            behavior = {
+                "sql_id": sql_id,
+                "category": category,
+                "elapsed_time": row.get("elapsed_time"),
+                "cpu_time": row.get("cpu_time"),
+                "buffer_gets": row.get("buffer_gets"),
+                "physical_reads": row.get("physical_reads"),
+                "executions": row.get("executions"),
+                "rows_processed": row.get("rows_processed"),
+                "sql_text": text,
+                "reason": describe_sql_behavior(category, row),
+                "text_analysis": text_analysis,
+                "efficiency_score": compute_sql_efficiency(row),
+            }
+            behaviors.append(behavior)
+
+    # Cross-SQL correlation: detect N+1 patterns
+    n1_groups = detect_n1_patterns(behaviors)
+    for group in n1_groups:
+        for beh in behaviors:
+            if beh["sql_id"] in group["sql_ids"]:
+                beh["n1_pattern"] = group
+
+    # Enrich with execution plan analysis
+    plan_stats = metrics.get("sql_plan_statistics", {})
+    if plan_stats:
+        for beh in behaviors:
+            sql_id = beh.get("sql_id", "")
+            plan = plan_stats.get(sql_id)
+            if plan:
+                beh["plan_analysis"] = analyze_execution_plan(plan)
+
+    # Enrich with detailed execution plans (new parser capability)
+    exec_plans = metrics.get("execution_plans", {})
+    if exec_plans:
+        for beh in behaviors:
+            sql_id = beh.get("sql_id", "")
+            nodes = exec_plans.get(sql_id) or exec_plans.get(f"_plan_{sql_id}", [])
+            if nodes:
+                pa = beh.get("plan_analysis", {"issues": [], "hints": [], "access_path": "", "join_strategy": ""})
+                # Detect partition pruning issues
+                for node in nodes:
+                    pstart = str(node.get("pstart", "")).upper()
+                    pstop = str(node.get("pstop", "")).upper()
+                    if pstart == "ALL" or pstop == "ALL":
+                        obj = node.get("object_name", "")
+                        if obj:
+                            pa["issues"].append(f"分区表 {obj} 未触发分区裁剪（Pstart=ALL）")
+                    filters = str(node.get("filter_predicates", ""))
+                    op = str(node.get("operation", "")).upper()
+                    if filters and "TABLE ACCESS" in op and "FULL" in op:
+                        pa["issues"].append(f"全表扫描 {node.get('object_name', '')} 后有过滤条件，可能缺少索引")
+                    # High cost operations
+                    cost = safe_float(node.get("cost"))
+                    if cost > 10000 and "TABLE ACCESS" in op and "FULL" in op:
+                        pa["issues"].append(f"高代价全表扫描 {node.get('object_name', '')} cost={int(cost)}")
+                beh["plan_analysis"] = pa
+                beh["execution_plan_nodes"] = len(nodes)
+
+    # Compute behavior-derived metrics and write back to metrics dict
+    n1_count = sum(1 for beh in behaviors if beh.get("n1_pattern"))
+    metrics["n1_pattern_sql_count"] = n1_count
+
+    plan_changes = sum(1 for beh in behaviors if len(beh.get("plan_analysis", {}).get("issues", [])) > 1)
+    metrics["plan_change_sql_count"] = plan_changes
+
+    partition_all = sum(
+        1 for nodes in exec_plans.values()
+        for node in nodes
+        if str(node.get("pstart", "")).upper() == "ALL" or str(node.get("pstop", "")).upper() == "ALL"
+    )
+    metrics["partition_all_count"] = partition_all
+
+    type_conv_count = sum(1 for beh in behaviors if "implicit_type" in str(beh.get("text_analysis", {}).get("patterns", [])))
+    metrics["sql_with_type_conversion_count"] = type_conv_count
+
     return behaviors
+
+
+def analyze_sql_text(text):
+    """Analyze SQL text for common anti-patterns and generate diagnostics."""
+    if not text:
+        return {"patterns": [], "diagnostics": []}
+
+    upper = text.upper().strip()
+    patterns = []
+    diagnostics = []
+
+    # SELECT * detection
+    if re.search(r'\bSELECT\s+\*\s', upper + ' '):
+        patterns.append("select_star")
+        diagnostics.append("使用了 SELECT *，建议只选取必要列以减少逻辑读和网络传输")
+
+    # Missing WHERE clause
+    if not re.search(r'\bWHERE\b', upper) and re.search(r'\bSELECT\b', upper):
+        if not re.search(r'\b(DUAL|V\$|DBA_|ALL_|USER_|GV\$)\b', upper):
+            patterns.append("no_where")
+            diagnostics.append("缺少 WHERE 条件，可能导致全表扫描")
+
+    # Large IN list
+    in_match = re.search(r'\bIN\s*\((\s*\d+\s*(?:,\s*\d+\s*){5,})\)', upper)
+    if in_match:
+        patterns.append("large_in_list")
+        count = in_match.group(1).count(',') + 1
+        diagnostics.append(f"IN 列表包含 {count} 个值，建议使用临时表或绑定变量集合")
+
+    # LIKE '%...'
+    if re.search(r"LIKE\s+'%", upper):
+        patterns.append("leading_wildcard")
+        diagnostics.append("LIKE 以通配符开头（'%...'），无法使用索引")
+
+    # Implicit type conversion (string literal in numeric context)
+    if re.search(r"=\s*'[0-9]+'", text):
+        patterns.append("implicit_conversion")
+        diagnostics.append("可能存在隐式类型转换，字符串字面量用于数值比较")
+
+    # ORDER BY without LIMIT (in subqueries or main query)
+    if re.search(r'\bORDER\s+BY\b', upper) and not re.search(r'\b(ROWNUM|FETCH\s+FIRST|LIMIT|ROWNUM\s*<=)\b', upper):
+        patterns.append("sort_no_limit")
+        diagnostics.append("存在 ORDER BY 但无行数限制，大结果集排序会消耗大量 TEMP 和 CPU")
+
+    # Cartesian JOIN (no join condition between tables)
+    from_count = len(re.findall(r'\b(FROM|JOIN)\b', upper))
+    where_join = len(re.findall(r'\b\w+\.\w+\s*=\s*\w+\.\w+\b', upper))
+    if from_count >= 2 and where_join == 0 and not re.search(r'\bCROSS\s+JOIN\b', upper):
+        patterns.append("possible_cartesian")
+        diagnostics.append("可能存在笛卡尔积（多表无关联条件），请检查 JOIN 条件")
+
+    # Function on indexed column in WHERE
+    if re.search(r'\bWHERE\b.*\b(TO_CHAR|TO_DATE|TO_NUMBER|NVL|DECODE|TRUNC|UPPER|LOWER|SUBSTR)\s*\(', upper):
+        patterns.append("function_on_column")
+        diagnostics.append("WHERE 条件中对列使用了函数，可能导致索引失效")
+
+    # DISTINCT (often indicates missing proper join or data model issue)
+    if re.search(r'\bSELECT\s+DISTINCT\b', upper):
+        patterns.append("select_distinct")
+        diagnostics.append("使用了 DISTINCT，可能是 JOIN 产生了重复行或查询逻辑可以优化")
+
+    # NOT IN (often better rewritten as LEFT JOIN / NOT EXISTS)
+    if re.search(r'\bNOT\s+IN\s*\(', upper):
+        patterns.append("not_in")
+        diagnostics.append("使用了 NOT IN，如果子查询包含 NULL 可能导致结果异常，建议改用 NOT EXISTS 或 LEFT JOIN")
+
+    # OR conditions on different columns (causes index放弃)
+    or_count = len(re.findall(r'\bOR\b', upper))
+    if or_count >= 2 and re.search(r'\bWHERE\b', upper):
+        patterns.append("multiple_or")
+        diagnostics.append(f"WHERE 中有 {or_count} 个 OR 条件，可能导致优化器放弃索引改用全表扫描")
+
+    # UNION without ALL (potential unnecessary sort/distinct)
+    if re.search(r'\bUNION\b(?!\s+ALL\b)', upper) and 'UNION' in upper:
+        patterns.append("union_no_all")
+        diagnostics.append("使用了 UNION（而非 UNION ALL），如不需去重建议改用 UNION ALL 避免排序开销")
+
+    # Subquery in WHERE (potential correlated subquery)
+    if re.search(r'\bWHERE\b.*\bIN\s*\(\s*SELECT\b', upper):
+        patterns.append("subquery_in_where")
+        diagnostics.append("WHERE 中包含子查询，如果是关联子查询可能逐行执行，考虑改写为 JOIN")
+
+    # NVL/COALESCE on indexed column
+    if re.search(r'\b(NVL|COALESCE|DECODE)\s*\(\s*\w+\.\w+', upper):
+        patterns.append("nvl_on_column")
+        diagnostics.append("对列使用了 NVL/COALESCE/DECODE，可能导致该列上的索引无法使用")
+
+    # BETWEEN for date range (check for TO_DATE conversion)
+    if re.search(r'\bBETWEEN\b.*\bTO_DATE\b', upper):
+        patterns.append("date_between")
+        diagnostics.append("日期范围查询使用了 BETWEEN + TO_DATE，确保日期格式与列存储格式一致")
+
+    # UPDATE/DELETE without WHERE (dangerous)
+    if re.search(r'\b(UPDATE|DELETE)\s+(?!.*\bWHERE\b)', upper) and not re.search(r'\bWHERE\b', upper):
+        patterns.append("dml_no_where")
+        diagnostics.append("UPDATE/DELETE 缺少 WHERE 条件，将影响全表数据")
+
+    return {"patterns": patterns, "diagnostics": diagnostics}
+
+
+def compute_sql_efficiency(row):
+    """Compute an efficiency score (0-100) for a SQL statement."""
+    score = 100
+    executions = safe_float(row.get("executions"))
+    gets = safe_float(row.get("buffer_gets"))
+    reads = safe_float(row.get("physical_reads"))
+    elapsed = safe_float(row.get("elapsed_time"))
+    rows = safe_float(row.get("rows_processed"))
+
+    if not executions:
+        return 0  # No execution data
+
+    gets_per_exec = gets / executions if gets else 0
+    reads_per_exec = reads / executions if reads else 0
+    elapsed_per_exec = elapsed / executions if elapsed else 0
+
+    # Gets/Exec penalty
+    if gets_per_exec >= 100000:
+        score -= 40
+    elif gets_per_exec >= 10000:
+        score -= 25
+    elif gets_per_exec >= 1000:
+        score -= 10
+
+    # Reads/Exec penalty
+    if reads_per_exec >= 10000:
+        score -= 30
+    elif reads_per_exec >= 1000:
+        score -= 15
+
+    # Elapsed/Exec penalty
+    if elapsed_per_exec >= 60:
+        score -= 30
+    elif elapsed_per_exec >= 10:
+        score -= 15
+    elif elapsed_per_exec >= 1:
+        score -= 5
+
+    # Row source efficiency: rows returned per get
+    if gets and rows:
+        rows_per_get = rows / gets
+        if rows_per_get < 0.001:
+            score -= 15  # Very low return rate
+
+    return max(0, min(100, score))
+
+
+def detect_n1_patterns(behaviors):
+    """Detect N+1 query patterns: same SQL text with very high execution counts."""
+    groups = []
+    text_groups = {}
+    for beh in behaviors:
+        text = (beh.get("sql_text") or "").strip()
+        if not text or len(text) < 20:
+            continue
+        # Normalize: remove literals for fingerprinting
+        fingerprint = re.sub(r"'[^']*'", "?", text)
+        fingerprint = re.sub(r"\b\d+\b", "?", fingerprint)
+        fingerprint = fingerprint[:200]  # Use first 200 chars as fingerprint
+        text_groups.setdefault(fingerprint, []).append(beh)
+
+    for fp, group in text_groups.items():
+        if len(group) < 2:
+            continue
+        total_execs = sum(safe_float(b.get("executions")) for b in group)
+        if total_execs >= 1000:
+            sql_ids = list(set(b["sql_id"] for b in group if b.get("sql_id")))
+            if len(sql_ids) >= 1:
+                groups.append({
+                    "sql_ids": sql_ids,
+                    "total_executions": total_execs,
+                    "pattern": "n_plus_1",
+                    "diagnosis": f"检测到相似 SQL 模式共 {len(group)} 条，总执行 {int(total_execs)} 次，可能存在 N+1 查询问题",
+                })
+    return groups
+
+
+def analyze_execution_plan(plan):
+    """Analyze execution plan operations to infer access path issues."""
+    result = {"issues": [], "hints": [], "access_path": "", "join_strategy": ""}
+
+    operations = plan.get("operations", [])
+    if not operations:
+        return result
+
+    has_full_scan = False
+    has_index_scan = False
+    has_nested_loop = False
+    has_hash_join = False
+    has_merge_join = False
+    has_sort = False
+    has_filter = False
+    high_cost_ops = []
+    table_access_by_index = False
+
+    for op in operations:
+        op_name = str(op.get("operation", "")).upper()
+        obj = str(op.get("object_name", ""))
+        cost = safe_float(op.get("cost"))
+
+        # Full table scan
+        if "TABLE ACCESS" in op_name and "FULL" in op_name:
+            has_full_scan = True
+            if cost > 1000:
+                high_cost_ops.append(f"全表扫描 {obj} (cost={int(cost)})")
+                result["issues"].append(f"全表扫描 {obj}，cost={int(cost)}，可能缺少索引或统计信息过期")
+
+        # Index operations
+        if "INDEX" in op_name:
+            has_index_scan = True
+            if "FAST FULL SCAN" in op_name:
+                result["issues"].append(f"INDEX FAST FULL SCAN {obj}，可能索引过大或需要覆盖索引")
+            if "RANGE SCAN" in op_name and cost > 500:
+                result["issues"].append(f"INDEX RANGE SCAN {obj} cost={int(cost)}，范围扫描代价高，可能索引选择性差")
+
+        # Table access by index rowid
+        if "TABLE ACCESS" in op_name and "BY INDEX" in op_name:
+            table_access_by_index = True
+            if cost > 1000:
+                high_cost_ops.append(f"索引回表 {obj} (cost={int(cost)})")
+
+        # Join strategies
+        if "NESTED LOOPS" in op_name:
+            has_nested_loop = True
+        if "HASH JOIN" in op_name:
+            has_hash_join = True
+        if "MERGE JOIN" in op_name:
+            has_merge_join = True
+
+        # Sort operations
+        if "SORT" in op_name:
+            has_sort = True
+            if "TEMP" in op_name or "DISK" in str(op):
+                result["issues"].append("排序操作溢出到磁盘，PGA sort area 可能不足")
+
+        # Filter
+        if "FILTER" in op_name and cost > 500:
+            has_filter = True
+
+        # Partition operations
+        if "PARTITION" in op_name and "ALL" in op_name:
+            result["issues"].append("全分区扫描（PARTITION ALL），可能缺少分区裁剪")
+
+    # Access path summary
+    if has_full_scan and not has_index_scan:
+        result["access_path"] = "全表扫描为主"
+        result["hints"].append("考虑为高频查询添加索引")
+    elif table_access_by_index:
+        result["access_path"] = "索引回表访问"
+    elif has_index_scan:
+        result["access_path"] = "索引访问为主"
+
+    # Join strategy summary
+    if has_nested_loop and has_hash_join:
+        result["join_strategy"] = "混合 (Nested Loop + Hash Join)"
+    elif has_nested_loop:
+        result["join_strategy"] = "Nested Loop"
+    elif has_hash_join:
+        result["join_strategy"] = "Hash Join"
+    elif has_merge_join:
+        result["join_strategy"] = "Merge Join"
+
+    # Cross-analysis
+    if has_nested_loop and has_full_scan:
+        result["hints"].append("Nested Loop 内层有全表扫描，考虑改为 Hash Join 或添加索引")
+    if has_sort and has_full_scan:
+        result["hints"].append("排序+全表扫描组合，考虑添加索引消除排序")
+    if high_cost_ops:
+        result["hints"].append(f"高代价操作: {'; '.join(high_cost_ops[:3])}")
+
+    return result
 
 
 def describe_sql_behavior(category, row):
@@ -366,34 +834,155 @@ def describe_sql_behavior(category, row):
     gets = safe_float(row.get("buffer_gets"))
     reads = safe_float(row.get("physical_reads"))
 
+    parts = []
+
     if category == "高逻辑读 SQL":
         if executions and gets:
             gets_per_exec = gets / executions
             if gets_per_exec >= 100000:
-                return f"Buffer Gets 极高（{int(gets_per_exec)}/exec），可能存在全表扫描或低效执行计划。"
-            if gets_per_exec >= 10000:
-                return f"Buffer Gets 较高（{int(gets_per_exec)}/exec），可能是 CPU 和逻辑读压力来源。"
-        return "Buffer Gets 较高，可能是 CPU 和逻辑读压力来源。"
-    if category == "高物理读 SQL":
+                parts.append(f"Buffer Gets 极高（{int(gets_per_exec)}/exec），可能存在全表扫描或低效执行计划。")
+            elif gets_per_exec >= 10000:
+                parts.append(f"Buffer Gets 较高（{int(gets_per_exec)}/exec），可能是 CPU 和逻辑读压力来源。")
+            else:
+                parts.append("Buffer Gets 较高，可能是 CPU 和逻辑读压力来源。")
+        else:
+            parts.append("Buffer Gets 较高，可能是 CPU 和逻辑读压力来源。")
+    elif category == "高物理读 SQL":
         if executions and reads:
             reads_per_exec = reads / executions
             if reads_per_exec >= 10000:
-                return f"Physical Reads 极高（{int(reads_per_exec)}/exec），可能存在全表扫描或缺少索引。"
-            if reads_per_exec >= 1000:
-                return f"Physical Reads 较高（{int(reads_per_exec)}/exec），可能是 I/O 压力或访问路径问题来源。"
-        return "Physical Reads 较高，可能是 I/O 压力或访问路径问题来源。"
-    if category == "CPU SQL":
-        return "CPU Time 较高，可能存在计算、函数、排序、Hash Join 或执行计划问题。"
+                parts.append(f"Physical Reads 极高（{int(reads_per_exec)}/exec），可能存在全表扫描或缺少索引。")
+            elif reads_per_exec >= 1000:
+                parts.append(f"Physical Reads 较高（{int(reads_per_exec)}/exec），可能是 I/O 压力或访问路径问题来源。")
+            else:
+                parts.append("Physical Reads 较高，可能是 I/O 压力或访问路径问题来源。")
+        else:
+            parts.append("Physical Reads 较高，可能是 I/O 压力或访问路径问题来源。")
+    elif category == "CPU SQL":
+        parts.append("CPU Time 较高，可能存在计算、函数、排序、Hash Join 或执行计划问题。")
+    else:
+        # 高耗时 SQL
+        if not executions:
+            parts.append("无执行记录（可能失败或挂起），需检查 SQL 状态。")
+        elif executions >= 100000:
+            gets_hint = f"，Gets/Exec: {int(gets/executions)}" if gets and executions else ""
+            parts.append(f"执行次数很高（{int(executions)} 次），可能是高频 SQL 放大整体负载{gets_hint}。")
+        elif elapsed and executions and elapsed / max(executions, 1) >= 10:
+            parts.append(f"单次执行耗时较高（{elapsed/max(executions,1):.1f}s/exec），可能是大查询或复杂执行计划。")
+        else:
+            parts.append("位于 Top SQL 前列，是解释 DB Time 的优先排查入口。")
 
-    # 高耗时 SQL
-    if not executions:
-        return "无执行记录（可能失败或挂起），需检查 SQL 状态。"
-    if executions >= 100000:
-        gets_hint = f"，Gets/Exec: {int(gets/executions)}" if gets and executions else ""
-        return f"执行次数很高（{int(executions)} 次），可能是高频 SQL 放大整体负载{gets_hint}。"
-    if elapsed and executions and elapsed / max(executions, 1) >= 10:
-        return f"单次执行耗时较高（{elapsed/max(executions,1):.1f}s/exec），可能是大查询或复杂执行计划。"
-    return "位于 Top SQL 前列，是解释 DB Time 的优先排查入口。"
+    # Append SQL text analysis hints
+    text_analysis = analyze_sql_text(row.get("sql_text", ""))
+    for diag in text_analysis.get("diagnostics", []):
+        parts.append(diag)
+
+    return " | ".join(parts)
+
+
+def _extract_efficiency_pct(ie, names):
+    """Extract a percentage value from instance_efficiency dict, trying multiple name variants."""
+    if not ie:
+        return 0
+    for name in names:
+        for key, val in ie.items():
+            if name.lower() in str(key).lower():
+                return safe_float(val)
+    return 0
+
+
+def parse_pga_sga_advisory(rows, kind):
+    """Extract benefit percentage and sizes from PGA/SGA advisory table."""
+    result = {"benefit_pct": 0, "current_mb": 0, "optimal_mb": 0}
+    if not rows:
+        return result
+
+    # Advisory rows typically have: size_factor, size_mb, estd_extra_% (or similar)
+    best_benefit = 0
+    best_size = 0
+    current_size = 0
+    for row in rows:
+        size_mb = safe_float(row.get("size_mb") or row.get("pga_target_for_estimate") or row.get("sga_size") or 0)
+        benefit = safe_float(row.get("estd_extra_pct") or row.get("estd_over_alloc_count") or row.get("estd_pct_of_db_time_for_reads") or 0)
+        factor = safe_float(row.get("size_factor") or row.get("pga_target_factor") or row.get("sga_size_factor") or 0)
+
+        # The row with factor ~1.0 is the current size
+        if 0.9 <= factor <= 1.1 and size_mb > 0:
+            current_size = size_mb
+
+        if benefit > best_benefit:
+            best_benefit = benefit
+            best_size = size_mb
+
+    result["current_mb"] = current_size
+    result["optimal_mb"] = best_size
+    result["benefit_pct"] = round(best_benefit, 1)
+    return result
+
+
+def analyze_io_stats(rows):
+    """Analyze IO stats by tablespace to find hot spots and latency."""
+    result = {"hot_tablespace": "", "avg_read_latency_ms": 0, "avg_write_latency_ms": 0,
+              "high_latency_count": 0, "high_latency_tablespaces": []}
+    if not rows:
+        return result
+
+    total_read_latency = 0
+    total_write_latency = 0
+    read_count = 0
+    write_count = 0
+    max_wait = 0
+    hot_ts = ""
+    high_latency = []
+
+    for row in rows:
+        ts_name = row.get("tablespace_name") or row.get("name") or ""
+        read_lat = safe_float(row.get("av_rd_ms") or row.get("avg_read_latency_ms") or 0)
+        write_lat = safe_float(row.get("av_wr_ms") or row.get("avg_write_latency_ms") or 0)
+        total_wait = read_lat + write_lat
+
+        if read_lat > 0:
+            total_read_latency += read_lat
+            read_count += 1
+        if write_lat > 0:
+            total_write_latency += write_lat
+            write_count += 1
+
+        if total_wait > max_wait:
+            max_wait = total_wait
+            hot_ts = ts_name
+
+        if read_lat > 10:
+            high_latency.append({"tablespace": ts_name, "read_latency_ms": round(read_lat, 1)})
+
+    result["hot_tablespace"] = hot_ts
+    result["avg_read_latency_ms"] = round(total_read_latency / read_count, 1) if read_count else 0
+    result["avg_write_latency_ms"] = round(total_write_latency / write_count, 1) if write_count else 0
+    result["high_latency_count"] = len(high_latency)
+    result["high_latency_tablespaces"] = high_latency[:10]
+    return result
+
+
+def extract_foreground_metrics(rows):
+    """Extract key metrics from foreground wait class data."""
+    result = {"db_cpu_pct": 0, "top_wait_class": "", "top_wait_pct": 0}
+    if not rows:
+        return result
+
+    top_pct = 0
+    top_class = ""
+    for row in rows:
+        name = str(row.get("wait_class", "")).strip()
+        pct = safe_float(row.get("pct_db_time") or row.get("pct") or 0)
+        if "db cpu" in name.lower():
+            result["db_cpu_pct"] = pct
+        if pct > top_pct:
+            top_pct = pct
+            top_class = name
+
+    result["top_wait_class"] = top_class
+    result["top_wait_pct"] = round(top_pct, 1)
+    return result
 
 
 def detect_waiting_vs_cpu_model(metrics):

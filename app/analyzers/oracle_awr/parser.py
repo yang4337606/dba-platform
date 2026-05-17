@@ -26,6 +26,11 @@ SECTION_PATTERNS = {
     "pga_advisory": r"PGA Aggr Target Stats",
     "sga_advisory": r"SGA Target Advisory",
     "instance_activity": r"Key Instance Activity Stats",
+    "sql_plan_statistics": r"SQL Plan Statistics",
+    "sql_plans_by_elapsed": r"SQL Plans sorted by Elapsed",
+    "execution_plan": r"Execution Plan|Explain Plan|SQL Execution Plan",
+    "plan_hash_value": r"Plan Hash Value|SQL Plan Baseline",
+    "sql_workarea": r"SQL Work Area|Workarea Memory",
 }
 
 _TOP_EVENTS_PATTERNS = [
@@ -73,6 +78,9 @@ def parse_awr(input_data) -> dict[str, Any]:
         "pga_advisory": _section_rows(soup, SECTION_PATTERNS["pga_advisory"]),
         "sga_advisory": _section_rows(soup, SECTION_PATTERNS["sga_advisory"]),
         "instance_activity": _instance_activity(_section_rows(soup, SECTION_PATTERNS["instance_activity"])),
+        "sql_plan_statistics": _sql_plan_statistics(soup),
+        "execution_plans": _parse_execution_plans(soup),
+        "sql_plan_baselines": _parse_plan_baselines(soup),
     }
 
     if not parsed["wait_classes"]:
@@ -92,13 +100,106 @@ def _decode_input(input_data) -> str:
             with open(path, "rb") as f:
                 return _decode_input(f.read())
     if isinstance(input_data, bytes):
-        for encoding in ("utf-8", "gb18030", "latin-1"):
+        for encoding in ("utf-8", "gb18030", "latin-1", "gbk", "gb2312", "big5", "utf-16"):
             try:
-                return input_data.decode(encoding)
-            except UnicodeDecodeError:
+                decoded = input_data.decode(encoding)
+                if "<" in decoded or "table" in decoded.lower():
+                    return decoded
+            except (UnicodeDecodeError, LookupError):
                 continue
         return input_data.decode("utf-8", errors="ignore")
-    return str(input_data or "")
+    text = str(input_data or "")
+    # Handle text format AWR (SQL*Plus output)
+    if text and "<" not in text and "table" not in text.lower():
+        # May be plain text AWR — wrap in minimal HTML
+        if any(marker in text for marker in ["DB Time", "Elapsed", "Load Profile", "Top Timed"]):
+            text = _wrap_text_awr(text)
+    return text
+
+
+def _wrap_text_awr(text):
+    """Wrap plain-text AWR (SQL*Plus output) into parseable HTML tables."""
+    lines = text.split("\n")
+    html_parts = ["<html><body>"]
+    current_section = ""
+    in_table = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_table:
+                html_parts.append("</table>")
+                in_table = False
+            continue
+
+        # Detect section headers
+        if stripped.startswith("---") or stripped.startswith("==="):
+            if in_table:
+                html_parts.append("</table>")
+                in_table = False
+            continue
+
+        # Detect pipe-delimited table rows (common in text AWR)
+        if "|" in stripped:
+            cells = [c.strip() for c in stripped.split("|") if c.strip()]
+            if len(cells) >= 2:
+                if not in_table:
+                    # Check if this is a header row
+                    is_header = any(kw in stripped.lower() for kw in ["event", "class", "sql_id", "name", "%db time", "time(s)", "per second", "per sec"])
+                    html_parts.append(f'<table summary="{current_section}"><tr>')
+                    for cell in cells:
+                        tag = "th" if is_header else "td"
+                        html_parts.append(f"<{tag}>{cell}</{tag}>")
+                    html_parts.append("</tr>")
+                    in_table = True
+                else:
+                    html_parts.append("<tr>")
+                    for cell in cells:
+                        html_parts.append(f"<td>{cell}</td>")
+                    html_parts.append("</tr>")
+                    in_table = True
+            continue
+
+        # Detect space-delimited table rows (SQL*Plus output)
+        # Must have at least 2 columns separated by 2+ spaces
+        if re.match(r'\S.*\s{2,}\S', stripped) and not stripped.startswith("-"):
+            # Skip separator lines and non-data lines
+            if all(c in "-=" for c in stripped.replace(" ", "")):
+                continue
+            cells = [c.strip() for c in re.split(r'\s{2,}', stripped) if c.strip()]
+            if len(cells) >= 2:
+                if not in_table:
+                    is_header = any(kw in stripped.lower() for kw in ["event", "class", "sql_id", "name", "%db", "time(s)", "per second", "elapsed", "load profile", "snap"])
+                    html_parts.append(f'<table summary="{current_section}"><tr>')
+                    for cell in cells:
+                        tag = "th" if is_header else "td"
+                        html_parts.append(f"<{tag}>{cell}</{tag}>")
+                    html_parts.append("</tr>")
+                    if not is_header:
+                        in_table = True
+                else:
+                    html_parts.append("<tr>")
+                    for cell in cells:
+                        html_parts.append(f"<td>{cell}</td>")
+                    html_parts.append("</tr>")
+            continue
+
+        # Detect section names
+        if stripped and len(stripped) > 5 and not stripped[0].isdigit():
+            if any(kw in stripped for kw in ["Load Profile", "Time Model", "Wait Class", "Top ", "Instance Efficiency",
+                                               "SQL ordered", "Segment", "Latch", "Enqueue", "PGA", "SGA",
+                                               "Operating System", "Memory", "IO Stats", "Key Instance",
+                                               "Foreground"]):
+                current_section = stripped
+                if in_table:
+                    html_parts.append("</table>")
+                    in_table = False
+                html_parts.append(f"<h3>{stripped}</h3>")
+
+    if in_table:
+        html_parts.append("</table>")
+    html_parts.append("</body></html>")
+    return "\n".join(html_parts)
 
 
 def _extract_db_info(soup: BeautifulSoup) -> dict[str, str]:
@@ -130,11 +231,13 @@ def _section_rows(soup: BeautifulSoup, pattern: str) -> list[dict[str, str]]:
 def _find_table(soup: BeautifulSoup, pattern: str):
     regex = re.compile(pattern, re.IGNORECASE)
 
+    # Search in table summaries
     for table in soup.find_all("table"):
         summary = table.get("summary") or ""
         if regex.search(summary):
             return table
 
+    # Search in headers (h1-h4, b, p, span)
     for tag in soup.find_all(["h1", "h2", "h3", "h4", "b", "p", "span"]):
         if tag.find_parent("table"):
             continue
@@ -144,11 +247,18 @@ def _find_table(soup: BeautifulSoup, pattern: str):
             if table:
                 return table
 
+    # Search in text nodes
     for text_node in soup.find_all(string=regex):
         parent = text_node.parent
         if parent and (parent.name in {"a", "td", "th"} or parent.find_parent("table")):
             continue
         table = text_node.find_next("table")
+        if table:
+            return table
+
+    # Fallback: search in anchor names and id attributes
+    for anchor in soup.find_all("a", attrs={"name": regex}):
+        table = anchor.find_next("table")
         if table:
             return table
 
@@ -579,3 +689,265 @@ def _has_diagnostic_content(parsed: dict[str, Any]) -> bool:
         or parsed.get("top_sql_elapsed")
         or parsed.get("load_profile")
     )
+
+
+def _sql_plan_statistics(soup: BeautifulSoup) -> dict[str, list[dict[str, Any]]]:
+    """Parse SQL Plan Statistics section. Returns dict keyed by sql_id."""
+    plans = {}
+
+    # Try multiple patterns for plan statistics tables
+    plan_patterns = [
+        r"SQL Plan Statistics",
+        r"SQL Plans sorted by Elapsed",
+        r"Plan Statistics",
+    ]
+
+    for pattern in plan_patterns:
+        tables = []
+        regex = re.compile(pattern, re.IGNORECASE)
+        for table in soup.find_all("table"):
+            summary = table.get("summary") or ""
+            if regex.search(summary):
+                tables.append(table)
+            else:
+                # Check preceding headers
+                prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "p"])
+                if prev and regex.search(prev.get_text("", strip=True)):
+                    tables.append(table)
+
+        for table in tables:
+            rows = _parse_table(table)
+            if not rows:
+                continue
+
+            for row in rows:
+                sql_id = _first_value(row, ["sql_id", "sqlid", "sql id"], "")
+                if not sql_id:
+                    continue
+
+                plan_hash = _first_value(row, ["plan_hash_value", "plan_hash", "plan hash"], "")
+                operation = _first_value(row, ["operation", "operation_name", "op"], "")
+                object_name = _first_value(row, ["object_name", "object", "name"], "")
+                cost = _first_value(row, ["cost", "optimizer_cost"], "")
+                cardinality = _first_value(row, ["cardinality", "card", "rows"], "")
+                bytes_val = _first_value(row, ["bytes"], "")
+                time_val = _first_value(row, ["time", "elapsed"], "")
+                cpu_cost = _first_value(row, ["cpu_cost", "cpu cost"], "")
+                io_cost = _first_value(row, ["io_cost", "io cost"], "")
+
+                if sql_id not in plans:
+                    plans[sql_id] = {
+                        "sql_id": sql_id,
+                        "plan_hash_value": plan_hash,
+                        "operations": [],
+                    }
+
+                if operation:
+                    plans[sql_id]["operations"].append({
+                        "operation": operation,
+                        "object_name": object_name,
+                        "cost": cost,
+                        "cardinality": cardinality,
+                        "bytes": bytes_val,
+                        "time": time_val,
+                        "cpu_cost": cpu_cost,
+                        "io_cost": io_cost,
+                    })
+
+                # Update plan_hash if found
+                if plan_hash and not plans[sql_id]["plan_hash_value"]:
+                    plans[sql_id]["plan_hash_value"] = plan_hash
+
+    # Also extract SQL text from "Complete List of SQL Text" if available
+    _enrich_sql_text(soup, plans)
+
+    return plans
+
+
+def _enrich_sql_text(soup, plans):
+    """Try to extract full SQL text for planned SQL statements."""
+    sql_text_pattern = re.compile(r"Complete List of SQL Text|SQL Text", re.IGNORECASE)
+    for table in soup.find_all("table"):
+        summary = table.get("summary") or ""
+        prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "p"])
+        header_text = prev.get_text("", strip=True) if prev else ""
+        if sql_text_pattern.search(summary) or sql_text_pattern.search(header_text):
+            rows = _parse_table(table)
+            for row in rows:
+                sql_id = _first_value(row, ["sql_id", "sqlid"], "")
+                text = _first_value(row, ["sql_text", "sql_text", "text"], "")
+                if sql_id and text and sql_id in plans:
+                    plans[sql_id]["full_sql_text"] = text[:2000]
+            break
+
+
+def _parse_execution_plans(soup: BeautifulSoup) -> dict[str, list[dict[str, Any]]]:
+    """Parse hierarchical execution plans from AWR reports.
+
+    Handles 'Execution Plan', 'Explain Plan', and indented plan tree tables.
+    Returns dict keyed by sql_id -> list of plan nodes with depth info.
+    """
+    all_plans = {}
+
+    # Search for execution plan sections
+    ep_patterns = [
+        r"Execution Plan",
+        r"Explain Plan",
+        r"SQL Execution Plan",
+    ]
+
+    for pattern in ep_patterns:
+        regex = re.compile(pattern, re.IGNORECASE)
+        tables = []
+        for table in soup.find_all("table"):
+            summary = table.get("summary") or ""
+            if regex.search(summary):
+                tables.append(table)
+            else:
+                prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "p"])
+                if prev and regex.search(prev.get_text("", strip=True)):
+                    tables.append(table)
+
+        for table in tables:
+            rows = _parse_table(table)
+            if not rows:
+                continue
+
+            # Try to determine sql_id from preceding context or table data
+            sql_id = ""
+            for row in rows[:3]:
+                sql_id = _first_value(row, ["sql_id", "sqlid"], "")
+                if sql_id:
+                    break
+            if not sql_id:
+                # Use hash of first few rows as a pseudo-id
+                sql_id = f"_plan_{id(table) & 0xFFFF:04x}"
+
+            plan_nodes = _extract_plan_nodes(rows)
+            if plan_nodes:
+                if sql_id not in all_plans:
+                    all_plans[sql_id] = []
+                all_plans[sql_id].extend(plan_nodes)
+
+    # Also search for plan tables by summary containing "plan" or "explain"
+    for table in soup.find_all("table"):
+        summary = (table.get("summary") or "").lower()
+        if not any(kw in summary for kw in ("plan", "explain", "execut")):
+            continue
+        rows = _parse_table(table)
+        if not rows:
+            continue
+
+        # Check if rows look like execution plan data
+        sample_keys = set()
+        for row in rows[:3]:
+            sample_keys.update(k.lower() for k in row.keys())
+
+        plan_indicators = {"operation", "options", "object_name", "cost", "cardinality", "id"}
+        if not (plan_indicators & sample_keys):
+            continue
+
+        sql_id = ""
+        for row in rows[:3]:
+            sql_id = _first_value(row, ["sql_id", "sqlid"], "")
+            if sql_id:
+                break
+        if not sql_id:
+            sql_id = f"_plan_{id(table) & 0xFFFF:04x}"
+
+        plan_nodes = _extract_plan_nodes(rows)
+        if plan_nodes:
+            if sql_id not in all_plans:
+                all_plans[sql_id] = []
+            all_plans[sql_id].extend(plan_nodes)
+
+    return all_plans
+
+
+def _extract_plan_nodes(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Extract plan nodes from table rows, detecting depth from indentation."""
+    nodes = []
+    for row in rows:
+        operation = _first_value(row, ["operation", "operation_name", "op", "name"], "")
+        if not operation:
+            values = list(row.values())
+            operation = values[0] if values else ""
+
+        # Skip header-like or empty rows
+        if not operation or operation.lower() in ("operation", "id", "---", "optimizer"):
+            continue
+
+        # Detect depth from leading whitespace/indentation
+        depth = 0
+        raw_op = operation
+        leading_spaces = len(operation) - len(operation.lstrip())
+        if leading_spaces > 0:
+            depth = leading_spaces // 2
+
+        node = {
+            "id": _first_value(row, ["id"], ""),
+            "operation": raw_op.strip(),
+            "options": _first_value(row, ["options", "opt"], ""),
+            "object_owner": _first_value(row, ["object_owner", "owner"], ""),
+            "object_name": _first_value(row, ["object_name", "object", "name"], ""),
+            "object_type": _first_value(row, ["object_type", "type"], ""),
+            "cost": _first_value(row, ["cost", "optimizer_cost"], ""),
+            "cardinality": _first_value(row, ["cardinality", "card", "rows", "est_rows"], ""),
+            "bytes": _first_value(row, ["bytes"], ""),
+            "time": _first_value(row, ["time", "elapsed"], ""),
+            "cpu_cost": _first_value(row, ["cpu_cost", "cpu cost"], ""),
+            "io_cost": _first_value(row, ["io_cost", "io cost"], ""),
+            "pstart": _first_value(row, ["pstart", "partition_start"], ""),
+            "pstop": _first_value(row, ["pstop", "partition_stop"], ""),
+            "temp_space": _first_value(row, ["temp_space", "temp"], ""),
+            "filter_predicates": _first_value(row, ["filter_predicates", "filter", "filters"], ""),
+            "access_predicates": _first_value(row, ["access_predicates", "access", "predicates"], ""),
+            "depth": depth,
+        }
+        nodes.append(node)
+
+    return nodes
+
+
+def _parse_plan_baselines(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """Parse SQL Plan Baseline information if present in the AWR."""
+    baselines = []
+    patterns = [
+        r"SQL Plan Baseline",
+        r"Plan Hash Value",
+        r"Plan baseline",
+    ]
+
+    for pattern in patterns:
+        regex = re.compile(pattern, re.IGNORECASE)
+        for table in soup.find_all("table"):
+            summary = table.get("summary") or ""
+            prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "p"])
+            header_text = prev.get_text("", strip=True) if prev else ""
+            if not (regex.search(summary) or regex.search(header_text)):
+                continue
+
+            rows = _parse_table(table)
+            if not rows:
+                continue
+
+            for row in rows:
+                plan_hash = _first_value(row, ["plan_hash_value", "plan_hash", "plan hash value"], "")
+                sql_id = _first_value(row, ["sql_id", "sqlid"], "")
+                plan_name = _first_value(row, ["plan_name", "baseline plan name", "name"], "")
+                enabled = _first_value(row, ["enabled", "accepted"], "")
+                origin = _first_value(row, ["origin"], "")
+                executions = _first_value(row, ["executions", "execs"], "")
+
+                if plan_hash or plan_name:
+                    baselines.append({
+                        "sql_id": sql_id,
+                        "plan_hash_value": plan_hash,
+                        "plan_name": plan_name,
+                        "enabled": enabled,
+                        "origin": origin,
+                        "executions": executions,
+                    })
+            break
+
+    return baselines

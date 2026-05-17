@@ -1,3 +1,7 @@
+import os
+
+import yaml
+
 from app.analyzers.oracle_awr.metrics import extract_awr_metrics, safe_float
 from app.analyzers.oracle_awr.parser import parse_awr
 from app.analyzers.oracle_awr.event_semantics import SEMANTIC_DISPLAY_NAMES
@@ -11,9 +15,21 @@ from app.core.models import (
     ProblemDomain,
     Recommendation,
 )
+from app.core.rule_engine import evaluate_rules_grouped
 
 
 SEVERITY_RANK = {"NORMAL": 0, "OBSERVE": 1, "WARNING": 2, "HIGH": 3}
+
+_RULES_CACHE = None
+
+
+def _load_rules():
+    global _RULES_CACHE
+    if _RULES_CACHE is None:
+        rules_path = os.path.join(os.path.dirname(__file__), "rules.yaml")
+        with open(rules_path, encoding="utf-8") as f:
+            _RULES_CACHE = yaml.safe_load(f)
+    return _RULES_CACHE
 CAUSE_GRAPH = {
     "access_path": ["temp", "redo", "hot_block"],
     "temp": ["redo"],
@@ -52,6 +68,11 @@ class OracleAwrAnalyzer(AnalyzerBase):
         severity = self.detect_result_severity(context.problem_domains)
         summary = self.build_summary(context)
 
+        # Rule engine evaluation
+        rules = _load_rules()
+        workload_type = metrics.get("workload_type", "")
+        rule_results = evaluate_rules_grouped(metrics, rules, workload_type)
+
         result = DiagnosisResult(
             analyzer_type=self.analyzer_type,
             title="Oracle AWR 智能诊断结果",
@@ -61,11 +82,23 @@ class OracleAwrAnalyzer(AnalyzerBase):
             raw_metrics=metrics,
         )
         result.conclusions = self.build_conclusions(context, main_domains, active_domains, metrics)
-        result.abnormal_findings = self.build_findings(context)
+        result.abnormal_findings = self.build_findings(context, rule_results)
         result.root_causes = self.build_root_causes(metrics, context)
         result.root_cause_flows = self.build_cause_flows(context)
-        result.evidence = self.build_evidence(metrics, context)
-        result.recommendations = self.build_recommendations(metrics, context)
+        result.evidence = self.build_evidence(metrics, context, rule_results)
+        result.recommendations = self.build_recommendations(metrics, context, rule_results)
+
+        # Add hidden risk findings
+        hidden_risks = self._detect_hidden_risks(metrics, context)
+        if hidden_risks:
+            result.abnormal_findings.extend(hidden_risks)
+            for risk in hidden_risks:
+                result.recommendations.append(Recommendation(
+                    priority="P4",
+                    action=risk.reason,
+                    reason=risk.description,
+                ))
+
         return result
 
     def build_parse_failed_result(self, metrics):
@@ -128,6 +161,8 @@ class OracleAwrAnalyzer(AnalyzerBase):
             top_sql_cpu=metrics.get("top_sql_cpu") or [],
             top_sql_gets=metrics.get("top_sql_gets") or [],
             top_sql_reads=metrics.get("top_sql_reads") or [],
+            sql_plan_statistics=metrics.get("sql_plan_statistics") or {},
+            sql_plan_tree=metrics.get("sql_plan_tree") or {},
         )
 
     def build_problem_domains(self, metrics, context):
@@ -487,7 +522,7 @@ class OracleAwrAnalyzer(AnalyzerBase):
             return f"RAC Global Cache 等待占 {gc_pct}% DB Time，需要检查跨实例热点和互联网络。"
         return ""
 
-    def build_findings(self, context):
+    def build_findings(self, context, rule_results=None):
         findings = []
         chains = self.build_root_cause_chains(context)
         if chains:
@@ -503,37 +538,58 @@ class OracleAwrAnalyzer(AnalyzerBase):
                     )
                 )
             self.append_sql_finding(context, findings)
-            return findings
-
-        visible_names = {domain.name for domain in self.visible_domains(context.problem_domains)}
-        for domain in context.problem_domains:
-            if domain.severity == "NORMAL":
-                continue
-            if domain.name not in visible_names:
-                continue
-            findings.append(
-                Finding(
-                    name=self.domain_finding_name(domain),
-                    severity=domain.severity,
-                    value=self.format_domain_value(domain),
-                    description=self.build_domain_reason(domain),
-                    reason=domain.recommendation,
+        else:
+            visible_names = {domain.name for domain in self.visible_domains(context.problem_domains)}
+            for domain in context.problem_domains:
+                if domain.severity == "NORMAL":
+                    continue
+                if domain.name not in visible_names:
+                    continue
+                findings.append(
+                    Finding(
+                        name=self.domain_finding_name(domain),
+                        severity=domain.severity,
+                        value=self.format_domain_value(domain),
+                        description=self.build_domain_reason(domain),
+                        reason=domain.recommendation,
+                    )
                 )
-            )
 
-        checkpoint = self.find_event(context, "log file switch (checkpoint incomplete)")
-        if checkpoint:
-            findings.append(
-                Finding(
-                    name="log file switch (checkpoint incomplete) 明显异常",
-                    severity="WARNING",
-                    value=f"{checkpoint.get('pct_db_time')}% DB Time",
-                    description=f"等待 {checkpoint.get('time_s')} 秒，平均等待 {checkpoint.get('avg_wait_ms')}ms。",
-                    reason="通常说明 redo log 切换过快、redo 日志组偏小、checkpoint 跟不上，或 DBWR/存储写入能力不足。",
+            checkpoint = self.find_event(context, "log file switch (checkpoint incomplete)")
+            if checkpoint:
+                findings.append(
+                    Finding(
+                        name="log file switch (checkpoint incomplete) 明显异常",
+                        severity="WARNING",
+                        value=f"{checkpoint.get('pct_db_time')}% DB Time",
+                        description=f"等待 {checkpoint.get('time_s')} 秒，平均等待 {checkpoint.get('avg_wait_ms')}ms。",
+                        reason="通常说明 redo log 切换过快、redo 日志组偏小、checkpoint 跟不上，或 DBWR/存储写入能力不足。",
+                    )
                 )
-            )
 
-        self.append_sql_finding(context, findings)
+            self.append_sql_finding(context, findings)
+
+        # Merge rule engine findings (avoid duplicates with existing findings)
+        if rule_results:
+            existing_keywords = set()
+            for f in findings:
+                existing_keywords.update(f.name.split())
+            for rule in rule_results.get("matched_rules", []):
+                rule_finding = rule.get("finding", "")
+                # Skip if rule finding overlaps significantly with existing
+                rule_words = set(rule_finding.split())
+                overlap = len(rule_words & existing_keywords)
+                if overlap >= 2:
+                    continue
+                findings.append(
+                    Finding(
+                        name=rule_finding,
+                        severity=rule.get("severity", "OBSERVE"),
+                        description=rule.get("description", ""),
+                        reason=rule.get("recommendation", ""),
+                    )
+                )
+
         return findings
 
     def build_root_causes(self, metrics, context):
@@ -614,7 +670,7 @@ class OracleAwrAnalyzer(AnalyzerBase):
             causes.append("当前没有单一压倒性问题域，需要结合 Top Events、Top SQL 和业务时段交叉判断。")
         return causes
 
-    def build_evidence(self, metrics, context):
+    def build_evidence(self, metrics, context, rule_results=None):
         evidence = {
             "负载强度": [
                 EvidenceItem("Elapsed", f"{context.elapsed_minutes} 分钟"),
@@ -682,9 +738,101 @@ class OracleAwrAnalyzer(AnalyzerBase):
         evidence["诊断明细 - 事件语义"] = self.semantic_evidence(metrics)
         evidence["诊断明细 - Top SQL 行为"] = self.sql_behavior_evidence(metrics)
 
+        # Rule engine evidence
+        if rule_results and rule_results.get("matched_rules"):
+            rule_evidence = []
+            for rule in rule_results["matched_rules"][:15]:
+                rule_evidence.append(EvidenceItem(
+                    rule.get("id", ""),
+                    f"[{rule.get('severity', '')}] {rule.get('finding', '')}",
+                    rule.get("description", ""),
+                ))
+            evidence["规则引擎诊断"] = rule_evidence
+
+        # Phase 5: Additional evidence from previously unused data
+        # PGA/SGA Advisory
+        pga_benefit = metrics.get("pga_advisory_benefit_pct", 0)
+        sga_benefit = metrics.get("sga_advisory_benefit_pct", 0)
+        if pga_benefit or sga_benefit:
+            advisory_items = []
+            if pga_benefit:
+                advisory_items.append(EvidenceItem(
+                    "PGA Advisory",
+                    f"改进空间: {pga_benefit}%，当前: {metrics.get('pga_advisory_current_mb', 0)}MB，建议: {metrics.get('pga_advisory_estimated_optimal_mb', 0)}MB",
+                    "PGA Advisory 估计改进空间",
+                ))
+            if sga_benefit:
+                advisory_items.append(EvidenceItem(
+                    "SGA Advisory",
+                    f"改进空间: {sga_benefit}%，当前: {metrics.get('sga_advisory_current_mb', 0)}MB，建议: {metrics.get('sga_advisory_estimated_optimal_mb', 0)}MB",
+                    "SGA Advisory 估计改进空间",
+                ))
+            evidence["PGA/SGA Advisory"] = advisory_items
+
+        # IO Stats by tablespace
+        avg_read_lat = metrics.get("io_stats_avg_read_latency_ms", 0)
+        if avg_read_lat:
+            io_items = [
+                EvidenceItem("平均读延迟", f"{avg_read_lat}ms"),
+                EvidenceItem("平均写延迟", f"{metrics.get('io_stats_avg_write_latency_ms', 0)}ms"),
+                EvidenceItem("热点表空间", metrics.get("io_stats_hot_tablespace", "N/A")),
+                EvidenceItem("高延迟表空间数", metrics.get("io_stats_high_latency_count", 0)),
+            ]
+            for ts in (metrics.get("io_stats_high_latency_tablespaces") or [])[:5]:
+                io_items.append(EvidenceItem(
+                    f"  {ts.get('tablespace', '')}",
+                    f"读延迟: {ts.get('read_latency_ms', 0)}ms",
+                    "高延迟表空间",
+                ))
+            evidence["IO Stats (按表空间)"] = io_items
+
+        # Foreground Wait Class
+        fg_cpu = metrics.get("foreground_db_cpu_pct", 0)
+        fg_top = metrics.get("fg_top_wait_class", "")
+        if fg_cpu or fg_top:
+            evidence["Foreground Wait Class"] = [
+                EvidenceItem("前台 DB CPU", f"{fg_cpu}%"),
+                EvidenceItem("前台 Top Wait Class", f"{fg_top} ({metrics.get('fg_top_wait_pct', 0)}%)"),
+            ]
+
+        # Segment Physical Reads
+        seg_phys = metrics.get("segments_physical_reads_top3", [])
+        if seg_phys:
+            evidence["热点对象 (Physical Reads)"] = [
+                EvidenceItem(f"{s.get('owner', '')}.{s.get('object_name', '')}", f"{s.get('pct_total', 0)}% of Physical Reads")
+                for s in seg_phys
+            ]
+
+        # Segment Table Scans
+        seg_scans = metrics.get("segments_table_scans_top3", [])
+        if seg_scans:
+            evidence["热点对象 (Table Scans)"] = [
+                EvidenceItem(f"{s.get('owner', '')}.{s.get('object_name', '')}", f"{s.get('pct_total', 0)}% of Table Scans")
+                for s in seg_scans
+            ]
+
+        # Instance Efficiency
+        ie_items = []
+        for name, key in [
+            ("Buffer Hit Ratio", "buffer_hit_ratio"),
+            ("Library Cache Hit Ratio", "library_cache_hit_ratio"),
+            ("Dictionary Hit Ratio", "dict_hit_ratio"),
+            ("Latch Hit Ratio", "latch_hit_ratio"),
+            ("Soft Parse Ratio", "soft_parse_ratio"),
+            ("In-memory Sort Ratio", "in_memory_sort_ratio"),
+            ("Redo NoWait Ratio", "redo_nowait_ratio"),
+            ("Non-Parse CPU", "non_parse_cpu_ratio"),
+        ]:
+            val = metrics.get(key, 0)
+            if val:
+                status = "OK" if _efficiency_ok(key, val) else "LOW"
+                ie_items.append(EvidenceItem(name, f"{val}%", status))
+        if ie_items:
+            evidence["Instance Efficiency"] = ie_items
+
         return evidence
 
-    def build_recommendations(self, metrics, context):
+    def build_recommendations(self, metrics, context, rule_results=None):
         recommendations = []
         chains = self.build_root_cause_chains(context)
 
@@ -734,6 +882,51 @@ class OracleAwrAnalyzer(AnalyzerBase):
                     )
                 )
                 priority += 1
+
+        # Phase 5: Evidence-driven recommendations
+        pga_benefit = metrics.get("pga_advisory_benefit_pct", 0)
+        if pga_benefit >= 15:
+            optimal = metrics.get("pga_advisory_estimated_optimal_mb", 0)
+            current = metrics.get("pga_advisory_current_mb", 0)
+            rec_text = f"增大 PGA_AGGREGATE_TARGET（当前 {current}MB，建议 {optimal}MB）"
+            if not any(rec_text[:20] in r.action for r in recommendations):
+                recommendations.append(Recommendation(
+                    priority="P3",
+                    action=rec_text,
+                    reason=f"PGA Advisory 显示增大 PGA 可带来约 {pga_benefit}% 的性能改进。",
+                ))
+
+        io_high_latency = metrics.get("io_stats_high_latency_tablespaces", [])
+        if io_high_latency and len(io_high_latency) >= 1:
+            ts_names = ", ".join(ts.get("tablespace", "") for ts in io_high_latency[:3])
+            recommendations.append(Recommendation(
+                priority="P3",
+                action=f"检查高延迟表空间的存储配置: {ts_names}",
+                reason="这些表空间的平均读延迟超过 10ms，可能存在存储性能瓶颈。",
+            ))
+
+        seg_concentration = metrics.get("segment_scan_concentration_pct", 0)
+        if seg_concentration >= 50:
+            top_seg = (metrics.get("segments_table_scans_top3") or [{}])[0]
+            obj_name = f"{top_seg.get('owner', '')}.{top_seg.get('object_name', '')}" if top_seg else ""
+            if obj_name:
+                recommendations.append(Recommendation(
+                    priority="P3",
+                    action=f"检查 {obj_name} 是否需要添加索引（占表扫描 {seg_concentration}%）",
+                    reason="单一对象承载了大部分全表扫描，可能缺少合适索引。",
+                ))
+
+        # Precision parameter recommendations based on computed metrics
+        param_recs = self._compute_parameter_recommendations(metrics)
+        for rec in param_recs:
+            if not any(rec.action[:20] in r.action for r in recommendations):
+                recommendations.append(rec)
+
+        # Dynamic cross-metric causal inference
+        causal_recs = self._infer_causal_chains(metrics, context)
+        for rec in causal_recs:
+            if not any(rec.action[:20] == r.action[:20] for r in recommendations):
+                recommendations.append(rec)
 
         recommendations.append(
             Recommendation(
@@ -1204,14 +1397,41 @@ class OracleAwrAnalyzer(AnalyzerBase):
         return evidence
 
     def sql_behavior_evidence(self, metrics):
-        return [
-            EvidenceItem(
-                item.get("sql_id"),
-                item.get("category"),
-                item.get("reason"),
+        evidence = []
+        for item in metrics.get("top_sql_behaviors", []):
+            desc = item.get("reason", "")
+            text_info = item.get("text_analysis", {})
+            efficiency = item.get("efficiency_score", 0)
+            n1 = item.get("n1_pattern")
+            plan = item.get("plan_analysis", {})
+
+            extra_parts = []
+            if text_info.get("diagnostics"):
+                extra_parts.extend(text_info["diagnostics"])
+            if efficiency < 50:
+                extra_parts.append(f"效率评分: {efficiency}/100（低效）")
+            if n1:
+                extra_parts.append(f"N+1 模式: {n1.get('diagnosis', '')}")
+            if plan.get("issues"):
+                extra_parts.append(f"执行计划: {'; '.join(plan['issues'][:3])}")
+            if plan.get("hints"):
+                extra_parts.append(f"计划建议: {'; '.join(plan['hints'][:2])}")
+            if plan.get("access_path"):
+                extra_parts.append(f"访问路径: {plan['access_path']}")
+            if plan.get("join_strategy"):
+                extra_parts.append(f"JOIN 策略: {plan['join_strategy']}")
+
+            if extra_parts:
+                desc = desc + " | " + " | ".join(extra_parts) if desc else " | ".join(extra_parts)
+
+            evidence.append(
+                EvidenceItem(
+                    item.get("sql_id"),
+                    item.get("category"),
+                    desc,
+                )
             )
-            for item in metrics.get("top_sql_behaviors", [])
-        ]
+        return evidence
 
     def sql_detail_evidence(self, context):
         evidence = []
@@ -1342,6 +1562,433 @@ class OracleAwrAnalyzer(AnalyzerBase):
                     ids.append(sql_id)
         return ids
 
+    def _compute_parameter_recommendations(self, metrics):
+        """Compute specific parameter value recommendations based on metrics."""
+        recs = []
+
+        # PGA_AGGREGATE_TARGET
+        pga_benefit = metrics.get("pga_advisory_benefit_pct", 0)
+        pga_optimal = metrics.get("pga_advisory_estimated_optimal_mb", 0)
+        pga_current = metrics.get("pga_advisory_current_mb", 0)
+        disk_sorts = metrics.get("sorts_disk_per_sec", 0) or 0
+        temp_pct = metrics.get("temp_pct_db_time", 0) or 0
+
+        if pga_benefit >= 15 and pga_optimal and pga_current:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"PGA_AGGREGATE_TARGET: 建议从 {int(pga_current)}MB 增大到 {int(pga_optimal)}MB",
+                reason=f"PGA Advisory 估计改进空间 {pga_benefit}%，磁盘排序 {disk_sorts}/s，TEMP 等待 {temp_pct}%。",
+            ))
+        elif disk_sorts >= 10 or temp_pct >= 5:
+            cpu_count = metrics.get("cpu_count", 0) or 4
+            suggested_pga = max(2048, int(cpu_count * 512))
+            recs.append(Recommendation(
+                priority="P3",
+                action=f"PGA_AGGREGATE_TARGET: 建议增大到至少 {suggested_pga}MB（当前磁盘排序 {disk_sorts}/s，TEMP {temp_pct}%）",
+                reason="磁盘排序频繁或 TEMP 等待高，PGA 可能不足。",
+            ))
+
+        # SGA_TARGET
+        sga_benefit = metrics.get("sga_advisory_benefit_pct", 0)
+        sga_optimal = metrics.get("sga_advisory_estimated_optimal_mb", 0)
+        sga_current = metrics.get("sga_advisory_current_mb", 0)
+        buffer_hit = metrics.get("buffer_hit_ratio", 0) or 0
+
+        if sga_benefit >= 10 and sga_optimal and sga_current:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"SGA_TARGET: 建议从 {int(sga_current)}MB 增大到 {int(sga_optimal)}MB",
+                reason=f"SGA Advisory 估计改进空间 {sga_benefit}%，Buffer Hit Ratio {buffer_hit}%。",
+            ))
+        elif buffer_hit < 95 and buffer_hit > 0:
+            cpu_count = metrics.get("cpu_count", 0) or 4
+            suggested_sga = max(4096, int(cpu_count * 1024))
+            recs.append(Recommendation(
+                priority="P3",
+                action=f"db_cache_size / SGA: 建议增大 buffer cache（Buffer Hit Ratio={buffer_hit}% < 95%）",
+                reason="Buffer Cache 命中率低，增大缓存可减少物理读。",
+            ))
+
+        # SHARED_POOL_SIZE
+        lib_hit = metrics.get("library_cache_hit_ratio", 0) or 0
+        soft_parse = metrics.get("soft_parse_ratio", 0) or 0
+        hard_parses = metrics.get("hard_parses_per_sec", 0) or 0
+
+        if lib_hit < 95 and lib_hit > 0:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"shared_pool_size: 建议增大（Library Cache Hit={lib_hit}%，Hard Parses={hard_parses}/s）",
+                reason="Library Cache 命中率低，共享池可能偏小或绑定变量使用不足。",
+            ))
+        elif soft_parse < 80 and soft_parse > 0:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"session_cached_cursors: 建议增大到 200+（Soft Parse Ratio={soft_parse}%）",
+                reason="软解析比例低，增大 session_cached_cursors 可减少硬解析。",
+            ))
+
+        # LOG_BUFFER
+        log_sync_avg = metrics.get("log_file_sync_avg_ms", 0) or 0
+        avg_redo_size = metrics.get("avg_redo_write_size", 0) or 0
+
+        if log_sync_avg >= 5 and avg_redo_size < 1024:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"log_buffer: 建议增大（log file sync avg={log_sync_avg}ms，redo write avg={avg_redo_size} bytes）",
+                reason="Redo 写入频繁且每次写入量小，增大 log_buffer 可减少 log file sync 等待。",
+            ))
+
+        # PROCESSES / SESSIONS
+        logons = metrics.get("logons_per_sec", 0) or 0
+        if logons >= 50:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"processes / sessions: 检查连接池配置（当前 logons={logons}/s，建议使用连接池如 DRCP）",
+                reason="每秒登录次数过高，频繁创建/销毁连接浪费资源。",
+            ))
+
+        # CURSOR_SHARING
+        if hard_parses >= 200:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"cursor_sharing: 临时设为 FORCE（Hard Parses={hard_parses}/s），根本方案是使用绑定变量",
+                reason="硬解析极高，cursor_sharing=FORCE 可临时缓解，但需从应用层使用绑定变量。",
+            ))
+
+        return recs
+
+    def extract_learnable_patterns(self, metrics, rule_results, context):
+        """Extract learnable patterns from analysis results for knowledge accumulation.
+
+        Returns patterns in the same format as BUILTIN_PATTERNS for storage.
+        """
+        patterns = []
+        if not rule_results:
+            return patterns
+
+        matched = rule_results.get("matched_rules", [])
+        if not matched:
+            return patterns
+
+        # 1. Composite patterns: when 2+ rules match in the same category
+        by_category = {}
+        for rule in matched:
+            cat = rule.get("category", "other")
+            by_category.setdefault(cat, []).append(rule)
+
+        for cat, rules in by_category.items():
+            if len(rules) >= 2:
+                names = [r.get("finding", r.get("id", "")) for r in rules[:4]]
+                severity_levels = [r.get("severity", "OBSERVE") for r in rules]
+                max_sev = "HIGH" if "HIGH" in severity_levels else "WARNING" if "WARNING" in severity_levels else "OBSERVE"
+                patterns.append({
+                    "name": f"复合模式: {cat} 类多指标同时异常",
+                    "conditions": " AND ".join(r.get("id", "") for r in rules[:4]),
+                    "solution": f"1) {'；'.join(r.get('recommendation', '') for r in rules[:3] if r.get('recommendation'))}",
+                    "confidence": 0.85 if max_sev == "HIGH" else 0.75,
+                })
+
+        # 2. Hidden risk patterns: emit as learnable signals
+        hidden = self._detect_hidden_risks(metrics, context)
+        for risk in hidden[:3]:
+            patterns.append({
+                "name": risk.name,
+                "conditions": f"{risk.value}，描述: {risk.description}",
+                "solution": risk.reason,
+                "confidence": 0.70,
+            })
+
+        # 3. Co-occurrence patterns from top matched rules
+        top_rules = matched[:6]
+        for i in range(len(top_rules)):
+            for j in range(i + 1, min(i + 3, len(top_rules))):
+                r1, r2 = top_rules[i], top_rules[j]
+                if r1.get("category") != r2.get("category"):
+                    patterns.append({
+                        "name": f"关联模式: {r1.get('finding', '')[:20]} + {r2.get('finding', '')[:20]}",
+                        "conditions": f"{r1.get('id', '')} AND {r2.get('id', '')}",
+                        "solution": f"同时出现时需关联排查: {r1.get('recommendation', '')[:50]}；{r2.get('recommendation', '')[:50]}",
+                        "confidence": 0.65,
+                    })
+
+        # 4. Threshold boundary patterns
+        patterns.extend(self._extract_threshold_boundary_patterns(metrics, matched))
+
+        return patterns
+
+    def _extract_threshold_boundary_patterns(self, metrics, matched_rules):
+        """Extract patterns for metrics near their thresholds (within 10%)."""
+        patterns = []
+        for rule in matched_rules[:10]:
+            condition = rule.get("condition", {})
+            metric_name = condition.get("metric", "")
+            threshold = condition.get("value")
+            if not metric_name or threshold is None:
+                continue
+
+            actual = metrics.get(metric_name, 0) or 0
+            if not actual:
+                continue
+
+            try:
+                threshold = float(threshold)
+                actual = float(actual)
+                distance_pct = abs(actual - threshold) / max(abs(threshold), 1) * 100
+                if distance_pct <= 10:
+                    patterns.append({
+                        "name": f"阈值边界: {metric_name} 接近临界值",
+                        "conditions": f"{metric_name}={actual:.1f}，阈值={threshold}，距离={distance_pct:.1f}%",
+                        "solution": f"指标接近阈值边界，建议预防性优化 {metric_name}",
+                        "confidence": 0.55,
+                    })
+            except (ValueError, TypeError):
+                continue
+
+        return patterns
+
+    def _infer_causal_chains(self, metrics, context):
+        """Dynamic cross-metric causal inference — not limited to predefined rules."""
+        recs = []
+        workload = metrics.get("workload_type", "Mixed")
+
+        # 1. High CPU + High Gets → SQL execution plan issue
+        cpu_pct = metrics.get("db_cpu_pct_db_time", 0) or 0
+        gets = metrics.get("logical_read_blocks_per_sec", 0) or 0
+        if cpu_pct >= 40 and gets >= 50000:
+            gets_per_cpu = gets / max(cpu_pct, 1)
+            if gets_per_cpu > 1000:
+                recs.append(Recommendation(
+                    priority="P1",
+                    action=f"CPU+逻辑读关联分析: DB CPU {cpu_pct}%，Logical Reads {gets}/s，每 1% CPU 对应 {int(gets_per_cpu)} blocks/s 逻辑读",
+                    reason="CPU 消耗主要由逻辑读驱动，说明 SQL 执行计划可能是主因。优先检查 Gets/Exec 最高的 SQL。",
+                ))
+
+        # 2. High Physical Reads + High Avg Wait → Storage subsystem issue
+        phys = metrics.get("physical_read_blocks_per_sec", 0) or 0
+        read_io = metrics.get("read_io_mb_per_sec", 0) or 0
+        io_pct = metrics.get("user_io_pct_db_time", 0) or 0
+        if phys >= 20000 and io_pct >= 10:
+            blocks_per_mb = phys / max(read_io, 1) if read_io else 0
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"物理读+I/O 关联: Physical Reads {phys}/s，Read IO {read_io}MB/s，User I/O {io_pct}% DB Time",
+                reason="高物理读伴随高 I/O 等待，需要区分是 SQL 工作量问题还是存储性能问题。检查 db file sequential read 平均延迟。",
+            ))
+
+        # 3. Parse pressure + Latch → Shared pool thrashing
+        hard_parse = metrics.get("hard_parses_per_sec", 0) or 0
+        parse_pct = metrics.get("parse_time_pct_db_time", 0) or 0
+        latch_pct = metrics.get("latch_pct_db_time", 0) or 0
+        if (hard_parse >= 100 or parse_pct >= 8) and latch_pct >= 2:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"解析+Latch 关联: Hard Parses {hard_parse}/s，Parse {parse_pct}%，Latch {latch_pct}%",
+                reason="解析压力和 Latch 争用同时出现，可能存在共享池抖动（thrashing）。绑定变量是根本方案。",
+            ))
+
+        # 4. TEMP pressure + Large table scans → Missing indexes causing sort overflow
+        temp_pct = metrics.get("temp_pct_db_time", 0) or 0
+        scans = metrics.get("long_table_scans_per_sec", 0) or 0
+        disk_sorts = metrics.get("sorts_disk_per_sec", 0) or 0
+        if temp_pct >= 3 and (scans >= 10 or disk_sorts >= 5):
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"TEMP+扫描关联: TEMP {temp_pct}%，全表扫描 {scans}/s，磁盘排序 {disk_sorts}/s",
+                reason="TEMP 压力可能由缺少索引的查询引起，全表扫描导致大量排序溢出到磁盘。",
+            ))
+
+        # 5. Commit + Redo write pattern → Application design issue
+        commit_pct = metrics.get("commit_pct_db_time", 0) or 0
+        commits_sec = metrics.get("commits_per_sec", 0) or 0
+        avg_redo = metrics.get("avg_redo_write_size", 0) or 0
+        log_sync_avg = metrics.get("log_file_sync_avg_ms", 0) or 0
+        if commit_pct >= 8 and commits_sec >= 100 and avg_redo < 2048:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"提交+Redo 关联: Commit {commit_pct}%，{commits_sec}/s，redo write avg={avg_redo} bytes，log sync={log_sync_avg}ms",
+                reason="频繁小事务提交导致 redo 写入效率极低。应用应改为批量提交（每 100-1000 行 COMMIT 一次）。",
+            ))
+
+        # 6. RAC GC + High logical reads → Cross-instance hot block
+        gc_pct = metrics.get("gc_pct_db_time", 0) or 0
+        if gc_pct >= 5 and gets >= 50000:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"RAC+逻辑读关联: GC {gc_pct}%，Logical Reads {gets}/s",
+                reason="RAC Global Cache 等待伴随高逻辑读，可能存在跨实例热点块。检查 segment 热点对象是否跨节点访问频繁。",
+            ))
+
+        # 7. Network wait + High rows → Client fetch issue
+        net_pct = metrics.get("network_pct_db_time", 0) or 0
+        if net_pct >= 5:
+            top_sql = context.top_sql_elapsed[:5] if context else []
+            high_row_sql = [s for s in top_sql if safe_float(s.get("rows_processed", 0)) > 100000]
+            if high_row_sql:
+                recs.append(Recommendation(
+                    priority="P2",
+                    action=f"网络+大结果集关联: Network {net_pct}%，{len(high_row_sql)} 条 SQL 返回 >10 万行",
+                    reason="网络等待可能由大量数据传输引起。检查应用是否需要这么多数据，增大 arraysize/fetch size。",
+                ))
+
+        # 8. AAS saturation + multiple waits → System overload
+        aas = metrics.get("aas", 0) or 0
+        cpu_count = metrics.get("cpu_count", 0) or 0
+        if cpu_count and aas > cpu_count * 0.8:
+            active_domains = [d.name for d in (context.problem_domains if context else []) if d.severity != "NORMAL"]
+            if len(active_domains) >= 3:
+                recs.append(Recommendation(
+                    priority="P1",
+                    action=f"系统饱和关联: AAS={aas}，CPU={cpu_count}，多个问题域同时活跃: {', '.join(active_domains[:5])}",
+                    reason="AAS 接近或超过 CPU 核数且多个问题域同时活跃，系统处于过载状态。优先降低 Top SQL 消耗或减少并发。",
+                ))
+
+        # 9. Segment hotspot + I/O → specific object is the bottleneck
+        seg_conc = metrics.get("segment_scan_concentration_pct", 0) or 0
+        io_pct = metrics.get("user_io_pct_db_time", 0) or 0
+        if seg_conc >= 30 and io_pct >= 10:
+            top_seg = (metrics.get("segments_table_scans_top3") or [{}])[0]
+            obj_name = f"{top_seg.get('owner', '')}.{top_seg.get('object_name', '')}" if top_seg else ""
+            if obj_name:
+                recs.append(Recommendation(
+                    priority="P1",
+                    action=f"热点对象+I/O 关联: {obj_name} 承载 {seg_conc}% 表扫描，User I/O {io_pct}%",
+                    reason="单一对象承载大部分全表扫描且 I/O 等待显著，该对象是 I/O 瓶颈的根因。优先检查是否需要索引或分区。",
+                ))
+
+        # 10. Log file sync + avg_wait > 10ms + high commits → storage upgrade needed
+        log_sync_avg = metrics.get("log_file_sync_avg_ms", 0) or 0
+        log_write_avg = metrics.get("log_file_parallel_write_avg_ms", 0) or 0
+        if log_sync_avg >= 10 and log_write_avg >= 5:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"存储+Redo 关联: log file sync={log_sync_avg}ms，log file parallel write={log_write_avg}ms",
+                reason="log file sync 和 log file parallel write 延迟同时偏高，说明存储写延迟是根因。将 redo log 迁移到 SSD/NVMe。",
+            ))
+
+        # 11. DBWR + free buffer waits → cache too small or DBWR too slow
+        free_buf = metrics.get("free_buffer_waits_pct_db_time", 0) or 0
+        buffer_hit = metrics.get("buffer_hit_ratio", 0) or 0
+        if free_buf >= 1 and buffer_hit < 97:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"DBWR+缓存关联: Free Buffer Waits {free_buf}%，Buffer Hit={buffer_hit}%",
+                reason="DBWR 写出速度跟不上脏块产生速度。同时 Buffer Cache 偏小导致频繁淘汰。建议增大 DB_CACHE_SIZE 或增加 db_writer_processes。",
+            ))
+
+        # 12. Cursor leak risk (high open cursors + high executions)
+        open_cursors = metrics.get("open_cursors_per_sec", 0) or 0
+        executes = metrics.get("executes_per_sec", 0) or 0
+        if open_cursors >= 1000 and executes >= 5000:
+            recs.append(Recommendation(
+                priority="P2",
+                action=f"游标泄漏风险: Open Cursors={open_cursors}/s，Executes={executes}/s",
+                reason="游标创建速度过快，可能存在应用未正确关闭游标的泄漏问题。检查 V$OPEN_CURSOR。",
+            ))
+
+        # 13. Undo/long transaction risk
+        ora_1555 = metrics.get("ora_01555_count", 0) or 0
+        undo_violations = metrics.get("undo_retention_violations_count", 0) or 0
+        if ora_1555 >= 1 or undo_violations:
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"Undo 空间风险: ORA-01555={ora_1555}",
+                reason="出现 snapshot too old 错误，说明长事务读取的数据已被 Undo 覆盖。增大 UNDO 表空间或 UNDO_RETENTION，应用层拆分大事务。",
+            ))
+
+        # 14. Enqueue (lock) contention + top SQL → identify blocking SQL
+        enq_tx = metrics.get("enq_tx_row_lock_pct_db_time", 0) or 0
+        enq_tm = metrics.get("enq_tm_contention_pct_db_time", 0) or 0
+        if enq_tx >= 3 or enq_tm >= 3:
+            lock_events = []
+            if enq_tx:
+                lock_events.append(f"TX Row Lock {enq_tx}%")
+            if enq_tm:
+                lock_events.append(f"TM Contention {enq_tm}%")
+            recs.append(Recommendation(
+                priority="P1",
+                action=f"锁争用关联: {'; '.join(lock_events)}",
+                reason="事务锁或表级锁争用显著。TM 竞争通常由外键缺失索引引起。检查所有外键列是否都有索引。",
+            ))
+
+        return recs
+
+    def _detect_hidden_risks(self, metrics, context):
+        """Detect hidden risks — issues not yet critical but will become problems under load."""
+        risks = []
+
+        # 1. Redo log size too small (not causing issues now but will during peak)
+        log_switch_pct = metrics.get("log_file_switch_checkpoint_incomplete_pct_db_time", 0) or 0
+        redo_size = metrics.get("redo_size_per_sec", 0) or 0
+        if redo_size > 100000 and log_switch_pct == 0:
+            risks.append(Finding(
+                name="潜在风险: Redo 日志可能偏小",
+                severity="OBSERVE",
+                value=f"Redo {redo_size}/s",
+                description="当前 redo 切换未触发 checkpoint incomplete，但 redo 产出率较高。在业务高峰时可能出现日志切换等待。",
+                reason="建议检查 redo log 大小是否 ≥ 512MB，日志组数量是否 ≥ 4 组。",
+            ))
+
+        # 2. Buffer cache hit ratio trending toward threshold
+        buffer_hit = metrics.get("buffer_hit_ratio", 0) or 0
+        if 95 <= buffer_hit <= 97:
+            risks.append(Finding(
+                name="潜在风险: Buffer Cache 命中率临界",
+                severity="OBSERVE",
+                value=f"Buffer Hit={buffer_hit}%",
+                description="Buffer Hit Ratio 刚好在阈值边缘（95-97%），负载增加时可能跌破 95% 引发大量物理读。",
+                reason="建议预留 buffer cache 扩容空间，或检查 Top SQL 的 Gets/Exec 是否有优化空间。",
+            ))
+
+        # 3. Soft parse ratio approaching threshold
+        soft_parse = metrics.get("soft_parse_ratio", 0) or 0
+        if 80 <= soft_parse <= 90:
+            risks.append(Finding(
+                name="潜在风险: 软解析比例偏低",
+                severity="OBSERVE",
+                value=f"Soft Parse={soft_parse}%",
+                description="软解析比例在 80-90% 之间，尚可接受但并发增加时可能跌破 80% 导致解析风暴。",
+                reason="建议增大 session_cached_cursors，使用绑定变量。",
+            ))
+
+        # 4. High executions with moderate gets → potential future CPU issue
+        executes = metrics.get("executes_per_sec", 0) or 0
+        cpu_pct = metrics.get("db_cpu_pct_db_time", 0) or 0
+        if executes >= 5000 and 20 <= cpu_pct <= 40:
+            risks.append(Finding(
+                name="潜在风险: SQL 执行频率高且 CPU 在上升趋势",
+                severity="OBSERVE",
+                value=f"Executes={executes}/s，CPU={cpu_pct}%",
+                description="SQL 执行频率很高但 CPU 尚未达到严重水平。业务增长后 CPU 可能成为瓶颈。",
+                reason="建议检查是否存在可以合并或缓存的高频 SQL。",
+            ))
+
+        # 5. Segment concentration → future hot object issue
+        seg_conc = metrics.get("segment_scan_concentration_pct", 0) or 0
+        if 30 <= seg_conc < 50:
+            top_seg = (metrics.get("segments_table_scans_top3") or [{}])[0]
+            obj_name = f"{top_seg.get('owner', '')}.{top_seg.get('object_name', '')}" if top_seg else ""
+            if obj_name:
+                risks.append(Finding(
+                    name=f"潜在风险: {obj_name} 扫描集中度 {seg_conc}%",
+                    severity="OBSERVE",
+                    value=f"{seg_conc}%",
+                    description=f"{obj_name} 承载了 {seg_conc}% 的全表扫描，尚未达到临界但正在趋向集中。",
+                    reason=f"建议评估 {obj_name} 是否需要添加索引或分区。",
+                ))
+
+        # 6. Connection rate moderate → potential connection storm
+        logons = metrics.get("logons_per_sec", 0) or 0
+        if 20 <= logons < 50:
+            risks.append(Finding(
+                name="潜在风险: 登录频率中等偏高",
+                severity="OBSERVE",
+                value=f"Logons={logons}/s",
+                description="每秒登录次数中等，尚未达到连接风暴级别但可能在高峰期触发。",
+                reason="建议使用连接池（DRCP、应用层连接池）避免频繁创建/销毁连接。",
+            ))
+
+        return risks
+
     # Compatibility helpers kept for older tests and callers.
     def detect_main_bottleneck(self, metrics):
         candidates = []
@@ -1361,3 +2008,20 @@ class OracleAwrAnalyzer(AnalyzerBase):
             return "未发现明显单一瓶颈"
         candidates.sort(key=lambda item: item[1], reverse=True)
         return candidates[0][0]
+
+
+_EFFICIENCY_THRESHOLDS = {
+    "buffer_hit_ratio": 95,
+    "library_cache_hit_ratio": 95,
+    "dict_hit_ratio": 90,
+    "latch_hit_ratio": 99,
+    "soft_parse_ratio": 80,
+    "in_memory_sort_ratio": 95,
+    "redo_nowait_ratio": 99,
+    "non_parse_cpu_ratio": 90,
+}
+
+
+def _efficiency_ok(key, val):
+    threshold = _EFFICIENCY_THRESHOLDS.get(key, 90)
+    return val >= threshold

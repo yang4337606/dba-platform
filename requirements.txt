@@ -1,11 +1,6 @@
-# Runtime dependencies
 Flask>=2.3
 beautifulsoup4>=4.12
 lxml>=4.9
-Markdown>=3.4
-MarkupSafe>=2.1
 PyYAML>=6.0
-requests>=2.31
-
-# Development / Testing
 pytest>=7.0
+requests>=2.31

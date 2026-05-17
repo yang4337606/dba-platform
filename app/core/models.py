@@ -63,6 +63,11 @@ class AnalysisContext:
     top_sql_gets: List[Dict[str, Any]] = field(default_factory=list)
     top_sql_reads: List[Dict[str, Any]] = field(default_factory=list)
 
+    # SQL执行计划数据（来自 AWR SQL Plan Statistics / DBA_HIST_SQL_PLAN）
+    sql_plan_statistics: Dict[str, Any] = field(default_factory=dict)
+    # 完整 SQL Plan 树（每条 Top SQL 的执行计划步骤）
+    sql_plan_tree: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+
     problem_domains: List[ProblemDomain] = field(default_factory=list)
 
 
@@ -83,6 +88,7 @@ class DiagnosisResult:
 
     raw_metrics: Dict[str, Any] = field(default_factory=dict)
     raw_sections: Dict[str, Any] = field(default_factory=dict)
+    llm_deep_analysis: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict, converting nested dataclasses."""

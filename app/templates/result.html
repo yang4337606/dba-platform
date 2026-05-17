@@ -160,7 +160,122 @@
     {% endif %}
 
     {# ===== Section 5: AI Expert Analysis ===== #}
-    {% if llm_result and not llm_result.get('error') and llm_result.get('expert_analysis') %}
+    {% if result.llm_deep_analysis and not result.llm_deep_analysis.get('error') %}
+    {# Deep analysis takes priority over basic LLM result #}
+    <section>
+        <h2>AI 深度分析 <span class="ai-tag">LLM Deep</span></h2>
+        <div class="ai-analysis-card">
+            {% if result.llm_deep_analysis.get('root_cause_analysis') %}
+            <div class="ai-analysis-text markdown-content">
+                <h3>根因分析</h3>
+                {% for para in result.llm_deep_analysis.root_cause_analysis.split('\n\n') %}
+                {% if para.strip() %}
+                <div class="analysis-paragraph">
+                    {% for line in para.split('\n') %}
+                    {% if line.strip() %}
+                    <p>{{ line }}</p>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if result.llm_deep_analysis.get('problem_propagation_chain') %}
+            <details class="ai-details" open>
+                <summary>问题传播链 ({{ result.llm_deep_analysis.problem_propagation_chain | length }})</summary>
+                <div class="flow-block">
+                    {% for chain in result.llm_deep_analysis.problem_propagation_chain %}
+                    <p class="flow-path">
+                        <span class="flow-node flow-root">{{ chain.get('cause', '') }}</span>
+                        <span class="flow-arrow">&rarr;</span>
+                        <span class="flow-node flow-symptom">{{ chain.get('effect', '') }}</span>
+                    </p>
+                    {% if chain.get('evidence') %}<p class="flow-explain">{{ chain.evidence }}</p>{% endif %}
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if result.llm_deep_analysis.get('expert_analysis') %}
+            <details class="ai-details" open>
+                <summary>综合诊断</summary>
+                <div class="ai-analysis-text markdown-content">
+                    {% for para in result.llm_deep_analysis.expert_analysis.split('\n\n') %}
+                    {% if para.strip() %}
+                    <div class="analysis-paragraph">
+                        {% for line in para.split('\n') %}
+                        {% if line.strip() %}
+                        <p>{{ line }}</p>
+                        {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if result.llm_deep_analysis.get('key_findings') %}
+            <details class="ai-details" open>
+                <summary>关键发现 ({{ result.llm_deep_analysis.key_findings | length }})</summary>
+                <div class="ai-findings">
+                    {% for f in result.llm_deep_analysis.key_findings %}
+                    <div class="ai-finding-item">
+                        <span class="severity-dot severity-{{ f.get('severity', 'medium') }}"></span>
+                        <div>
+                            <strong>{{ f.get('title', '') }}</strong>
+                            <p>{{ f.get('detail', '') }}</p>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% endif %}
+
+            {% if result.llm_deep_analysis.get('sql_recommendations') %}
+            <details class="ai-details" open>
+                <summary>SQL 深度优化建议 ({{ result.llm_deep_analysis.sql_recommendations | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>SQL ID</th><th>问题</th><th>建议</th><th>执行计划建议</th><th>影响</th></tr></thead>
+                    <tbody>
+                    {% for rec in result.llm_deep_analysis.sql_recommendations %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('sql_id', '') }}</code></td>
+                        <td>{{ rec.get('issue', '') }}</td>
+                        <td>{{ rec.get('recommendation', '') }}</td>
+                        <td>{{ rec.get('execution_plan_hint', '') }}</td>
+                        <td><span class="severity-dot severity-{{ rec.get('estimated_impact', 'medium') }}"></span>{{ rec.get('estimated_impact', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+
+            {% if result.llm_deep_analysis.get('parameter_suggestions') %}
+            <details class="ai-details" open>
+                <summary>参数调整建议 ({{ result.llm_deep_analysis.parameter_suggestions | length }})</summary>
+                <table class="evidence-table">
+                    <thead><tr><th>参数</th><th>当前</th><th>建议值</th><th>原因</th></tr></thead>
+                    <tbody>
+                    {% for rec in result.llm_deep_analysis.parameter_suggestions %}
+                    <tr>
+                        <td class="ev-name"><code>{{ rec.get('parameter', '') }}</code></td>
+                        <td>{{ rec.get('current_value', '') }}</td>
+                        <td><strong>{{ rec.get('recommended_value', '') }}</strong></td>
+                        <td class="ev-desc">{{ rec.get('reason', '') }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </details>
+            {% endif %}
+        </div>
+    </section>
+
+    {% elif llm_result and not llm_result.get('error') and llm_result.get('expert_analysis') %}
     <section>
         <h2>AI 专家分析 <span class="ai-tag">LLM</span></h2>
         <div class="ai-analysis-card">
@@ -281,6 +396,9 @@
                 {% endif %}
                 {% if result.evidence.get("OS/主机信息") %}
                 <button class="tab-btn" onclick="switchTab(event, 'tab-host')">OS 信息</button>
+                {% endif %}
+                {% if result.evidence.get("PGA/SGA Advisory") or result.evidence.get("IO Stats (按表空间)") or result.evidence.get("Foreground Wait Class") %}
+                <button class="tab-btn" onclick="switchTab(event, 'tab-advanced')">高级指标</button>
                 {% endif %}
             </div>
 
@@ -417,6 +535,71 @@
                     {% endfor %}
                     </tbody>
                 </table>
+            </div>
+            {% endif %}
+
+            {% if result.evidence.get("PGA/SGA Advisory") or result.evidence.get("IO Stats (按表空间)") or result.evidence.get("Foreground Wait Class") or result.evidence.get("热点对象 (Physical Reads)") or result.evidence.get("热点对象 (Table Scans)") or result.evidence.get("规则引擎诊断") %}
+            <div id="tab-advanced" class="tab-panel">
+                {% if result.evidence.get("PGA/SGA Advisory") %}
+                <h3>PGA/SGA Advisory</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("PGA/SGA Advisory", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td><td class="ev-desc">{{ item.description or '' }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("IO Stats (按表空间)") %}
+                <h3>IO Stats (按表空间)</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("IO Stats (按表空间)", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("Foreground Wait Class") %}
+                <h3>Foreground Wait Class</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("Foreground Wait Class", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("热点对象 (Physical Reads)") %}
+                <h3>热点对象 (Physical Reads)</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("热点对象 (Physical Reads)", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("热点对象 (Table Scans)") %}
+                <h3>热点对象 (Table Scans)</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("热点对象 (Table Scans)", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if result.evidence.get("规则引擎诊断") %}
+                <h3>规则引擎诊断</h3>
+                <table class="evidence-table">
+                    <tbody>
+                    {% for item in result.evidence.get("规则引擎诊断", []) %}
+                    <tr><td class="ev-name">{{ item.name }}</td><td class="ev-value">{{ item.value }}</td><td class="ev-desc">{{ item.description or '' }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
             </div>
             {% endif %}
         </div>
