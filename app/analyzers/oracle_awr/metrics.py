@@ -437,6 +437,14 @@ def detect_cpu_saturation_risk(metrics):
 
 
 def detect_workload_type(metrics):
+    """Detect workload type using weighted scoring for hybrid identification.
+
+    Returns a dict with:
+      - primary: the dominant workload type (str)
+      - scores: normalized scores for each workload type (dict)
+      - mixed_detail: description when multiple types are significant (str or None)
+    For backward compatibility, the dict also behaves as a string via __str__.
+    """
     logical_reads = metrics.get("logical_read_blocks_per_sec", 0) or 0
     physical_reads = metrics.get("physical_read_blocks_per_sec", 0) or 0
     read_io = metrics.get("read_io_mb_per_sec", 0) or 0
@@ -449,22 +457,150 @@ def detect_workload_type(metrics):
     full_scan_pct = semantics.get("full_scan", {}).get("pct_db_time", 0)
     temp_pct = semantics.get("temp_pressure", {}).get("pct_db_time", 0)
     random_read_pct = semantics.get("oltp_random_read", {}).get("pct_db_time", 0)
+    commit_pct = metrics.get("commit_pct_db_time", 0) or 0
+    db_cpu_pct = metrics.get("db_cpu_pct_db_time", 0) or 0
+    aas = metrics.get("aas", 0) or 0
 
-    if metrics.get("db_cpu_pct_db_time", 0) < 5 and metrics.get("aas", 0) <= 1 and sum(group.get("pct_db_time", 0) for group in semantics.values()) < 5:
-        return "Idle"
-    if temp_pct >= 5 and write_io >= 10:
-        return "ETL"
-    if redo >= 500000 and write_io >= 10:
-        return "ETL"
+    # Check for Idle first
+    if db_cpu_pct < 5 and aas <= 1 and sum(group.get("pct_db_time", 0) for group in semantics.values()) < 5:
+        return _WorkloadResult("Idle", {"Idle": 1.0}, None)
+
+    # Weighted scoring for each workload type
+    scores = {"OLTP": 0, "OLAP": 0, "Batch": 0, "ETL": 0}
+
+    # --- OLTP signals ---
+    if transactions >= 50:
+        scores["OLTP"] += 3.0
+    elif transactions >= 20:
+        scores["OLTP"] += 2.0
+    elif transactions >= 5:
+        scores["OLTP"] += 1.0
+
+    if executes >= 5000:
+        scores["OLTP"] += 2.0
+    elif executes >= 1000:
+        scores["OLTP"] += 1.0
+
+    if random_read_pct >= 5:
+        scores["OLTP"] += 2.0
+    elif random_read_pct >= 3:
+        scores["OLTP"] += 1.0
+
+    if commit_pct >= 10:
+        scores["OLTP"] += 1.5
+    elif commit_pct >= 5:
+        scores["OLTP"] += 0.5
+
+    if logical_reads >= 100000 and physical_reads < 10000:
+        scores["OLTP"] += 1.0  # High logical, low physical = cached OLTP
+
+    # --- OLAP signals ---
+    if full_scan_pct >= 10:
+        scores["OLAP"] += 3.0
+    elif full_scan_pct >= 5:
+        scores["OLAP"] += 2.0
+    elif full_scan_pct >= 2:
+        scores["OLAP"] += 1.0
+
+    if physical_reads >= 100000:
+        scores["OLAP"] += 2.0
+    elif physical_reads >= 50000:
+        scores["OLAP"] += 1.5
+
+    if read_io >= 500:
+        scores["OLAP"] += 2.0
+    elif read_io >= 300:
+        scores["OLAP"] += 1.0
+
+    if temp_pct >= 5:
+        scores["OLAP"] += 1.5
+    elif temp_pct >= 2:
+        scores["OLAP"] += 0.5
+
+    # --- Batch signals ---
     if temp_pct >= 2 and full_scan_pct >= 2:
-        return "Batch"
-    if physical_reads >= 50000 or read_io >= 300 or full_scan_pct >= 5:
-        return "OLAP"
-    if transactions >= 20 or executes >= 1000 or random_read_pct >= 3:
-        return "OLTP"
+        scores["Batch"] += 2.0
+
     if redo >= 500000 and transactions >= 5:
-        return "Batch"
-    return "Mixed"
+        scores["Batch"] += 2.0
+
+    if write_io >= 20:
+        scores["Batch"] += 1.5
+    elif write_io >= 10:
+        scores["Batch"] += 1.0
+
+    if physical_reads >= 50000 and write_io >= 10:
+        scores["Batch"] += 1.0
+
+    # --- ETL signals ---
+    if temp_pct >= 5 and write_io >= 10:
+        scores["ETL"] += 3.0
+    elif temp_pct >= 3 and write_io >= 5:
+        scores["ETL"] += 1.5
+
+    if redo >= 500000 and write_io >= 10:
+        scores["ETL"] += 2.0
+
+    if redo >= 1000000:
+        scores["ETL"] += 1.0
+
+    # Normalize scores
+    total = sum(scores.values()) or 1
+    normalized = {k: round(v / total, 3) for k, v in scores.items()}
+
+    # Determine primary and check for mixed
+    sorted_types = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    primary = sorted_types[0][0] if sorted_types[0][1] > 0 else "Mixed"
+
+    # If top two types are close (within 40% of each other), report as mixed
+    mixed_detail = None
+    if len(sorted_types) >= 2 and sorted_types[0][1] > 0:
+        ratio = sorted_types[1][1] / sorted_types[0][1] if sorted_types[0][1] else 0
+        if ratio >= 0.6:
+            mixed_detail = f"{sorted_types[0][0]}({normalized[sorted_types[0][0]]:.0%}) + {sorted_types[1][0]}({normalized[sorted_types[1][0]]:.0%})"
+            primary = "Mixed"
+
+    # If no scores at all, default to Mixed
+    if all(v == 0 for v in scores.values()):
+        primary = "Mixed"
+        normalized = {"OLTP": 0.25, "OLAP": 0.25, "Batch": 0.25, "ETL": 0.25}
+
+    return _WorkloadResult(primary, normalized, mixed_detail)
+
+
+class _WorkloadResult:
+    """Workload detection result that behaves as a string for backward compatibility."""
+
+    def __init__(self, primary, scores, mixed_detail):
+        self.primary = primary
+        self.scores = scores
+        self.mixed_detail = mixed_detail
+
+    def __str__(self):
+        return self.primary
+
+    def __repr__(self):
+        return f"WorkloadResult(primary={self.primary!r}, scores={self.scores})"
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.primary == other
+        if isinstance(other, _WorkloadResult):
+            return self.primary == other.primary
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self.primary)
+
+    def __contains__(self, item):
+        # Support "OLTP" in workload_type style checks
+        return item in self.primary
+
+    def lower(self):
+        return self.primary.lower()
+
+    def upper(self):
+        return self.primary.upper()
 
 
 def classify_top_sql_behaviors(metrics):
