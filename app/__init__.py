@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 
 
 def create_app():
@@ -14,6 +14,11 @@ def create_app():
 
     app.register_blueprint(main_bp)
     app.register_blueprint(bp_async)
+
+    # Health check endpoint
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "ok"}), 200
 
     # Seed built-in knowledge on first run
     _seed_knowledge()
