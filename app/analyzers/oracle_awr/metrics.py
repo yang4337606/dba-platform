@@ -250,6 +250,14 @@ def extract_awr_metrics(parsed_data):
     # ADG apply lag (if available from event or instance activity)
     metrics["adg_apply_lag_seconds"] = 0  # Requires specific AWR sections not always present
 
+    # Resource Manager CPU quantum percentage
+    metrics["resmgr_cpu_quantum_pct_db_time"] = find_pct(top_events, ["resmgr:cpu quantum", "resmgr: cpu quantum"])
+
+    # In-Memory populate percentage (if available)
+    metrics["inmemory_populate_pct"] = 0  # Requires V$IM_SEGMENTS, not always in AWR
+    # Auto index count (21c+)
+    metrics["auto_index_count"] = 0  # Requires DBA_AUTO_INDEX_IND_ACTIONS
+
     # RAC instance load imbalance
     metrics["instance_load_imbalance_ratio"] = 0  # Requires multi-instance data
 

@@ -1219,3 +1219,530 @@
   description: AAS > 50 且 CPU 占 DB Time 超过 50%，系统过载。
   reason: 并发请求远超系统处理能力。
   recommendation: 立即扩容：增加 CPU/内存；使用 Resource Manager 降级非关键负载；将批处理迁移到低峰时段；启用连接池限制并发；横向扩展读负载到 ADG。
+
+# ============================================================
+# 扩展规则集 v2.2：覆盖 25 节点因果图全链路
+# ============================================================
+
+# === PGA + TEMP + Storage 复合链路 ===
+
+- id: pga_temp_storage_chain
+  category: Composite
+  severity: HIGH
+  rule_group: memory_io_chain
+  condition:
+    all:
+      - metric: temp_pct_db_time
+        op: ">="
+        value: 5
+      - metric: sorts_disk_per_sec
+        op: ">="
+        value: 10
+      - metric: user_io_pct_db_time
+        op: ">="
+        value: 15
+  finding: PGA→TEMP→Storage 三级溢出链路激活
+  description: PGA 不足导致排序溢出到 TEMP，进一步造成存储 I/O 压力。
+  reason: 内存不足→磁盘排序→存储负载上升，形成三级放大效应。
+  recommendation: |
+    1. 增大 PGA_AGGREGATE_TARGET（参考 PGA Advisory）
+    2. 优化 Top SQL 的排序操作（减少 ORDER BY / GROUP BY 数据量）
+    3. 检查 TEMP 表空间是否在高性能存储上
+    参数建议：PGA_AGGREGATE_TARGET >= 当前值 × 2；TEMP 表空间使用 SSD
+
+- id: temp_io_amplification
+  category: Composite
+  severity: WARNING
+  rule_group: temp_io
+  condition:
+    all:
+      - metric: direct_path_read_temp_pct_db_time
+        op: ">="
+        value: 3
+      - metric: direct_path_write_temp_pct_db_time
+        op: ">="
+        value: 2
+      - metric: physical_read_blocks_per_sec
+        op: ">="
+        value: 20000
+  finding: TEMP 读写导致 I/O 放大
+  description: TEMP 表空间的读写操作叠加常规 I/O，放大了整体存储压力。
+  reason: Hash Join 或排序溢出到 TEMP，与正常数据文件 I/O 争用存储带宽。
+  recommendation: 将 TEMP 表空间迁移到独立的高速存储；增大 PGA 减少溢出；检查驱动表选择。
+
+# === CPU + Latch + Parse 复合链路 ===
+
+- id: cpu_latch_parse_chain
+  category: Composite
+  severity: HIGH
+  rule_group: cpu_parse_chain
+  condition:
+    all:
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 40
+      - metric: latch_pct_db_time
+        op: ">="
+        value: 3
+      - metric: hard_parses_per_sec
+        op: ">="
+        value: 50
+  finding: CPU→Latch→Parse 恶性循环
+  description: 高 CPU 消耗伴随 Latch 争用和硬解析，三者相互放大。
+  reason: 硬解析消耗 CPU 并持有 shared pool latch，导致其他会话等待 latch，进一步排队消耗 CPU。
+  recommendation: |
+    1. 使用绑定变量消除硬解析（根本方案）
+    2. 临时设置 cursor_sharing=FORCE
+    3. 增大 shared_pool_size 减缓淘汰
+    参数建议：cursor_sharing=FORCE；shared_pool_size >= 当前值 × 1.5
+
+- id: cpu_buffer_gets_chain
+  category: Composite
+  severity: HIGH
+  rule_group: cpu_logical_io
+  condition:
+    all:
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 50
+      - metric: logical_read_blocks_per_sec
+        op: ">="
+        value: 200000
+      - metric: buffer_hit_ratio
+        op: ">="
+        value: 95
+  finding: CPU 瓶颈源于高逻辑读（非 I/O 问题）
+  description: Buffer Cache 命中率高但逻辑读极高，CPU 消耗主要来自 SQL 执行的逻辑读。
+  reason: SQL 执行路径效率低（如嵌套循环大表、缺少索引），虽然数据在缓存中但扫描量巨大。
+  recommendation: 优化 Top SQL 的执行计划（添加索引、改写查询）；检查 Gets/Exec 最高的 SQL。
+
+# === Buffer Cache + DBWR 链路 ===
+
+- id: buffer_dbwr_chain
+  category: Composite
+  severity: HIGH
+  rule_group: buffer_write_chain
+  condition:
+    all:
+      - metric: buffer_hit_ratio
+        op: "<"
+        value: 90
+      - metric: free_buffer_waits_pct_db_time
+        op: ">="
+        value: 2
+  finding: Buffer Cache 不足 + DBWR 写出瓶颈
+  description: 缓存命中率低且出现 Free Buffer Waits，DBWR 无法及时写出脏块。
+  reason: Buffer Cache 太小导致频繁淘汰，DBWR 写出能力跟不上脏块产生速度。
+  recommendation: |
+    1. 增大 db_cache_size
+    2. 增加 db_writer_processes
+    3. 启用异步 I/O：filesystemio_options=SETALL
+    参数建议：db_cache_size >= 当前值 × 2；db_writer_processes = CPU 核数 / 4
+
+- id: checkpoint_dbwr_bottleneck
+  category: Composite
+  severity: HIGH
+  rule_group: checkpoint_chain
+  condition:
+    all:
+      - metric: log_file_switch_checkpoint_incomplete_pct_db_time
+        op: ">="
+        value: 2
+      - metric: free_buffer_waits_pct_db_time
+        op: ">="
+        value: 1
+  finding: Checkpoint + DBWR 双重瓶颈
+  description: 日志切换时 checkpoint 未完成，同时 DBWR 写出不及时。
+  reason: DBWR 写能力不足导致 checkpoint 无法按时完成，日志切换被阻塞。
+  recommendation: |
+    1. 增大 redo log 文件到 2-4GB
+    2. 增加 db_writer_processes
+    3. 优化存储写入能力
+    4. 检查 FAST_START_MTTR_TARGET 设置
+
+# === Lock + Concurrency 链路 ===
+
+- id: lock_cascade_chain
+  category: Composite
+  severity: HIGH
+  rule_group: lock_cascade
+  condition:
+    all:
+      - metric: enq_tx_row_lock_pct_db_time
+        op: ">="
+        value: 3
+      - metric: aas
+        op: ">="
+        value: 10
+  finding: 行锁争用引发会话堆积
+  description: 行锁争用导致大量会话等待，AAS 急剧升高。
+  reason: 少量长事务持有行锁，其他会话排队等待形成级联阻塞。
+  recommendation: |
+    1. 查找 blocking session：SELECT blocking_session FROM V$SESSION WHERE event LIKE '%TX%'
+    2. 优化长事务逻辑，缩短锁持有时间
+    3. 考虑使用 SELECT ... FOR UPDATE SKIP LOCKED
+    4. 检查是否存在外键缺失索引导致的 TM 锁
+
+- id: lock_latch_interaction
+  category: Composite
+  severity: WARNING
+  rule_group: lock_latch
+  condition:
+    all:
+      - metric: enq_tm_contention_pct_db_time
+        op: ">="
+        value: 2
+      - metric: latch_pct_db_time
+        op: ">="
+        value: 3
+  finding: 表锁争用伴随 Latch 争用
+  description: TM 锁争用和 Latch 争用同时出现。
+  reason: 外键缺失索引导致 TM 锁，同时高并发访问导致 Latch 争用，两者叠加放大性能影响。
+  recommendation: 为所有外键列创建索引；检查 Top Latch 类型；减少并发 DML 对同一父表的操作。
+
+# === Redo + Commit + Storage 链路 ===
+
+- id: redo_commit_storage_chain
+  category: Composite
+  severity: HIGH
+  rule_group: redo_full_chain
+  condition:
+    all:
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 15
+      - metric: log_file_sync_avg_ms
+        op: ">="
+        value: 8
+      - metric: log_file_parallel_write_avg_ms
+        op: ">="
+        value: 3
+  finding: Redo→Commit→Storage 全链路瓶颈
+  description: Redo 写入延迟→Commit 等待→存储层响应慢，形成完整瓶颈链。
+  reason: 存储写入慢导致 LGWR 写 redo 延迟，进而放大 log file sync，阻塞所有提交操作。
+  recommendation: |
+    1. 将 redo log 迁移到 SSD/NVMe（最高优先级）
+    2. 分离 redo log 和 datafile 到不同存储
+    3. 检查应用提交频率，减少不必要的频繁提交
+    参数建议：log_buffer >= 64MB；redo log 文件 >= 2GB
+
+- id: commit_frequency_abuse
+  category: Composite
+  severity: WARNING
+  rule_group: commit_pattern
+  condition:
+    all:
+      - metric: commits_per_sec
+        op: ">="
+        value: 500
+      - metric: avg_redo_write_size
+        op: "<="
+        value: 1024
+  finding: 提交频率过高，每次提交数据量极小
+  description: 每秒提交数百次但每次 redo 写入量很小，典型的逐行提交模式。
+  reason: 应用逐条 INSERT/UPDATE 后立即 COMMIT，或 JDBC autoCommit=true。
+  recommendation: |
+    1. 批量提交：每 1000-10000 行 COMMIT 一次
+    2. JDBC 关闭 autoCommit
+    3. PL/SQL 使用 FORALL + SAVE EXCEPTIONS
+    4. 增大 log_buffer 缓解 LGWR 压力
+
+# === RAC + Network 链路 ===
+
+- id: rac_network_full_chain
+  category: Composite
+  severity: HIGH
+  rule_group: rac_network_chain
+  condition:
+    all:
+      - metric: gc_pct_db_time
+        op: ">="
+        value: 10
+      - metric: gc_buffer_busy_pct_db_time
+        op: ">="
+        value: 5
+  finding: RAC GC 等待 + 缓存争用全链路瓶颈
+  description: 跨实例 Global Cache 传输和 GC Buffer Busy 同时严重。
+  reason: 数据热点跨实例访问频繁，Interconnect 带宽或延迟不足，GC 争用形成瓶颈。
+  recommendation: |
+    1. 检查 V$CLUSTER_INTERCONNECTS 的带宽和延迟
+    2. 使用 Service 绑定将关联业务固定到同一实例
+    3. 使用 Hash Partition 分散热块
+    4. 增大 Sequence Cache（RAC 环境 >= 10000）
+
+- id: rac_sequence_gc_chain
+  category: Composite
+  severity: WARNING
+  rule_group: rac_sequence
+  condition:
+    all:
+      - metric: enq_sq_contention_pct_db_time
+        op: ">="
+        value: 1
+      - metric: gc_pct_db_time
+        op: ">="
+        value: 5
+  finding: Sequence 争用叠加 RAC GC 等待
+  description: Sequence 跨实例争用导致 GC 等待放大。
+  reason: Sequence Cache 太小，每次获取 nextval 需跨实例协调。
+  recommendation: ALTER SEQUENCE seq_name CACHE 10000 NOORDER；考虑使用 12c+ IDENTITY 列。
+
+# === Parallel Query + CPU 链路 ===
+
+- id: parallel_cpu_saturation
+  category: Composite
+  severity: HIGH
+  rule_group: parallel_cpu
+  condition:
+    all:
+      - metric: px_deq_credit_send_blkd_pct_db_time
+        op: ">="
+        value: 5
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 60
+      - metric: cpu_saturation_risk
+        op: "=="
+        value: 1
+  finding: 并行查询导致 CPU 完全饱和
+  description: 并行查询消耗了大量 CPU 资源，系统已达到 CPU 饱和状态。
+  reason: parallel_max_servers 设置过高，或 OLTP 系统误用并行查询。
+  recommendation: |
+    1. 降低 parallel_max_servers（OLTP 系统建议 = CPU 核数）
+    2. 对 OLTP 表设置 NOPARALLEL
+    3. 使用 Resource Manager 限制并行度
+    参数建议：parallel_max_servers <= CPU 核数；parallel_degree_policy=AUTO
+
+# === Resource Manager 链路 ===
+
+- id: resource_manager_throttle
+  category: System
+  severity: WARNING
+  condition:
+    metric: resmgr_cpu_quantum_pct_db_time
+    op: ">="
+    value: 5
+  finding: Resource Manager 正在限制 CPU 分配
+  description: resmgr:cpu quantum 等待明显，Resource Manager 在主动限制某些会话的 CPU 使用。
+  reason: 当前会话所在的消费者组被 Resource Manager 限制了 CPU 配额。
+  recommendation: |
+    1. 检查 DBA_RSRC_CONSUMER_GROUPS 配置
+    2. 确认是否有误配置导致关键业务被限流
+    3. 如不需要 Resource Manager，可设置 resource_manager_plan=''
+
+# === Undo + 长事务 链路 ===
+
+- id: undo_long_tx_io_chain
+  category: Composite
+  severity: HIGH
+  rule_group: undo_chain
+  condition:
+    all:
+      - any:
+          - metric: undo_retention_violations_count
+            op: ">="
+            value: 1
+          - metric: ora_01555_count
+            op: ">="
+            value: 1
+      - metric: user_io_pct_db_time
+        op: ">="
+        value: 20
+  finding: Undo 问题叠加 I/O 瓶颈
+  description: Undo 保留违规或 ORA-01555 同时伴随高 I/O 等待。
+  reason: 长事务产生大量 Undo I/O，加剧存储压力；Undo 不足导致读一致性失败。
+  recommendation: |
+    1. 增大 UNDO_TABLESPACE
+    2. 增大 UNDO_RETENTION
+    3. 拆分大事务为小批次
+    4. 将 Undo 表空间迁移到高性能存储
+
+# === ADG/Flashback 链路 ===
+
+- id: adg_lag_with_redo_pressure
+  category: Composite
+  severity: WARNING
+  rule_group: adg_redo
+  condition:
+    all:
+      - metric: adg_apply_lag_seconds
+        op: ">="
+        value: 30
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 10
+  finding: ADG Apply Lag 伴随主库 Commit 压力
+  description: 备库 apply 延迟且主库 Commit 等待明显。
+  reason: 主库产生大量 redo，备库 apply 跟不上，同时主库自身也存在 redo 写入压力。
+  recommendation: |
+    1. 增大备库并行 apply 进程
+    2. 检查主备间网络带宽
+    3. 优化主库提交频率
+    4. 考虑使用 Far Sync
+
+# === 21c/23ai 新特性规则 ===
+
+- id: inmemory_population_lag
+  category: Memory
+  severity: WARNING
+  condition:
+    metric: inmemory_populate_pct
+    op: "<"
+    value: 80
+  finding: In-Memory 填充率不足
+  description: In-Memory Column Store 填充率低于 80%，部分数据未加载到内存。
+  reason: INMEMORY_SIZE 不足或 populate 优先级设置不当。
+  recommendation: |
+    1. 增大 INMEMORY_SIZE
+    2. 设置关键表 INMEMORY PRIORITY CRITICAL
+    3. 检查 V$IM_SEGMENTS 确认未填充的对象
+
+- id: auto_index_ineffective
+  category: SQL
+  severity: OBSERVE
+  condition:
+    all:
+      - metric: auto_index_count
+        op: ">="
+        value: 1
+      - metric: logical_read_blocks_per_sec
+        op: ">="
+        value: 100000
+  finding: 自动索引已创建但逻辑读仍然很高
+  description: 21c 自动索引功能已创建索引但整体逻辑读未显著下降。
+  reason: 自动索引可能未覆盖最关键的查询，或索引选择性不足。
+  recommendation: |
+    1. 检查 DBA_AUTO_INDEX_IND_ACTIONS 确认自动索引状态
+    2. 使用 SQL Tuning Advisor 手动优化 Top SQL
+    3. 评估自动索引的效果：DBMS_AUTO_INDEX.REPORT_LAST_ACTIVITY
+
+- id: blockchain_table_overhead
+  category: Application
+  severity: OBSERVE
+  condition:
+    all:
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 15
+      - metric: commits_per_sec
+        op: ">="
+        value: 200
+  finding: 高提交频率场景下需评估 Blockchain/Immutable 表开销
+  description: 高频提交场景如果使用了 Blockchain 或 Immutable 表，额外的验证和哈希计算可能加重 Commit 开销。
+  reason: 21c Blockchain 表每次 INSERT 需要计算行哈希并验证链完整性。
+  recommendation: 检查是否有 Blockchain/Immutable 表在高频 DML 路径上；评估是否可以批量操作减少开销。
+
+# === 跨域综合诊断规则 ===
+
+- id: full_stack_io_bottleneck
+  category: Composite
+  severity: HIGH
+  rule_group: full_stack_io
+  condition:
+    all:
+      - metric: user_io_pct_db_time
+        op: ">="
+        value: 25
+      - metric: db_file_sequential_read_avg_ms
+        op: ">="
+        value: 8
+      - metric: buffer_hit_ratio
+        op: "<"
+        value: 95
+  finding: 全栈 I/O 瓶颈（SQL→Buffer→Storage）
+  description: I/O 等待高、单块读延迟大、缓存命中率低，三层同时出现问题。
+  reason: 从 SQL 访问路径到 Buffer Cache 到存储层都存在效率问题。
+  recommendation: |
+    1. 优化 SQL 访问路径（添加索引、优化 JOIN）
+    2. 增大 db_cache_size 提高命中率
+    3. 检查存储性能（iostat await > 10ms 说明存储慢）
+    4. 考虑将热数据迁移到 SSD
+
+- id: mixed_workload_contention
+  category: Composite
+  severity: WARNING
+  rule_group: workload_conflict
+  condition:
+    all:
+      - metric: db_cpu_pct_db_time
+        op: ">="
+        value: 30
+      - metric: temp_pct_db_time
+        op: ">="
+        value: 3
+      - metric: commit_pct_db_time
+        op: ">="
+        value: 5
+  finding: 混合负载争用（OLTP+OLAP/Batch 同时运行）
+  description: CPU、TEMP、Commit 三类等待同时偏高，说明不同类型负载在争用资源。
+  reason: OLTP 小事务频繁提交与 OLAP/Batch 大查询同时运行，争用 CPU 和存储资源。
+  recommendation: |
+    1. 使用 Resource Manager 隔离 OLTP 和 OLAP 负载
+    2. 将 Batch/OLAP 查询迁移到 ADG 备库
+    3. 使用 Service 区分不同负载类型
+    4. 调整批处理作业到低峰时段
+
+- id: network_fetch_bottleneck
+  category: Composite
+  severity: WARNING
+  rule_group: network_app
+  condition:
+    all:
+      - metric: net_pct_db_time
+        op: ">="
+        value: 8
+      - metric: user_calls_per_sec
+        op: ">="
+        value: 5000
+  finding: 网络等待 + 高频用户调用
+  description: 网络等待偏高且用户调用频率极高。
+  reason: 应用与数据库交互过于频繁（小包多次往返），网络延迟被放大。
+  recommendation: |
+    1. 增大 fetch arraysize（从默认 10 调到 100-500）
+    2. 使用批量操作减少往返次数
+    3. 检查网络延迟（ping 应 < 1ms）
+    4. 考虑应用层缓存减少数据库调用
+
+# === 参数建议规则（Parameter Advisory）===
+
+- id: param_sga_auto_tune
+  category: Memory
+  severity: OBSERVE
+  condition:
+    all:
+      - metric: sga_advisory_benefit_pct
+        op: ">="
+        value: 10
+      - metric: buffer_hit_ratio
+        op: "<"
+        value: 95
+  finding: SGA 自动调优建议
+  description: SGA Advisory 显示有优化空间，且 Buffer Cache 命中率偏低。
+  reason: 当前 SGA 配置未达最优。
+  recommendation: |
+    建议参数调整：
+    - SGA_TARGET: 增大到 Advisory 建议值
+    - DB_CACHE_SIZE: 增大 50%（如果使用手动 SGA 管理）
+    - MEMORY_TARGET: 考虑使用自动内存管理（11g+）
+    注意：参数调整后需要监控 1-2 周确认效果
+
+- id: param_redo_optimization
+  category: Redo
+  severity: OBSERVE
+  condition:
+    all:
+      - metric: log_file_sync_avg_ms
+        op: ">="
+        value: 5
+      - metric: avg_redo_write_size
+        op: "<="
+        value: 2048
+  finding: Redo 配置优化建议
+  description: Log file sync 延迟偏高且每次 redo 写入量小。
+  reason: 频繁小量写入导致 LGWR 效率低下。
+  recommendation: |
+    建议参数调整：
+    - LOG_BUFFER: >= 64MB（减少 LGWR 写入频率）
+    - Redo Log 文件大小: >= 2GB（减少切换频率）
+    - Redo Log 组数: >= 4（避免切换等待）
+    - 考虑 COMMIT_WRITE='BATCH,NOWAIT'（仅适用于可接受少量数据丢失的场景）
