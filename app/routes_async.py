@@ -1,21 +1,18 @@
 """
 异步分析路由 - 支持后台任务
 """
-from flask import Blueprint, jsonify, request, render_template, redirect, url_for, flash
-
-from app.core.registry import get_analyzer
-from app.core.renderer import render_markdown
-from app.knowledge import KnowledgeBase
-from app.models import db
-from app.rag import get_retriever
-from app.advisor import advisor
-from app.task_manager import task_manager
+import os
 import logging
+
+from flask import Blueprint, jsonify, request, render_template, redirect, url_for, flash
+from werkzeug.utils import secure_filename
+
+from app.analysis_pipeline import run_analysis
+from app.task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 
 bp_async = Blueprint("async", __name__, url_prefix="/async")
-kb = KnowledgeBase()
 
 
 def analyze_file_task(file_content, filename, analyzer_type):
@@ -24,92 +21,21 @@ def analyze_file_task(file_content, filename, analyzer_type):
     即使用户关闭页面，这个任务也会继续执行
     """
     try:
-        # 1. 分析文件
-        analyzer = get_analyzer(analyzer_type)
-        result = analyzer.analyze(file_content)
-        markdown = render_markdown(result)
-
-        # 2. LLM增强（可选）
-        llm_result = None
-        llm_config = kb.load_config()
-        if llm_config.get("api_key"):
-            try:
-                from app.llm import LLMClient
-                client = LLMClient(**llm_config)
-                active_patterns = kb.get_active_patterns()
-                llm_result = client.analyze(result, result.raw_metrics or {}, active_patterns)
-                if llm_result and not llm_result.get("error"):
-                    kb.save_case(result, llm_result)
-                    kb.learn_patterns(llm_result.get("learned_patterns", []))
-            except Exception as exc:
-                logger.warning("LLM enhancement failed: %s", exc)
-
-        # 3. 保存到历史记录
-        record_id = None
-        try:
-            record_id = db.save_analysis(
-                filename=filename,
-                analyzer_type=analyzer_type,
-                result=result.to_dict() if hasattr(result, 'to_dict') else {},
-                llm_result=llm_result if llm_result and not llm_result.get("error") else None,
-                markdown=markdown
-            )
-        except Exception as e:
-            logger.warning("Failed to save history: %s", e)
-
-        # 4. 检索相似案例
-        similar_cases = []
-        try:
-            result_dict = result.to_dict() if hasattr(result, 'to_dict') else {}
-            main_problem = result_dict.get("main_bottleneck", "")
-            diagnosis_summary = result_dict.get("summary", "")
-            query_text = f"{main_problem} {diagnosis_summary}"
-
-            if query_text.strip():
-                retriever = get_retriever(db)
-                rag_results = retriever.search(query_text, limit=3, min_similarity=0.1)
-
-                # 增量添加当前记录到索引
-                if record_id:
-                    retriever.add_record({
-                        'id': record_id,
-                        'main_problem': main_problem,
-                        'diagnosis_summary': diagnosis_summary,
-                        'load_type': result_dict.get("diagnosis", {}).get("load_type", ""),
-                        'filename': filename,
-                        'analyzer_type': analyzer_type,
-                    })
-
-                for item in rag_results:
-                    record = item['record']
-                    record['similarity'] = item['similarity']
-                    similar_cases.append(record)
-        except Exception as e:
-            logger.warning("Failed to get similar cases: %s", e)
-
-        # 5. 生成智能建议
-        smart_recommendations = []
-        try:
-            smart_recommendations = advisor.generate_recommendations(result, db_identifier=None)
-        except Exception as e:
-            logger.warning("Failed to generate smart recommendations: %s", e)
-
+        pipeline_result = run_analysis(file_content, filename, analyzer_type)
         return {
             "success": True,
-            "record_id": record_id,
-            "result": result.to_dict() if hasattr(result, 'to_dict') else {},
-            "markdown": markdown,
-            "llm_result": llm_result,
-            "similar_cases": similar_cases,
-            "smart_recommendations": smart_recommendations,
+            "record_id": pipeline_result.get("record_id"),
+            "result": (pipeline_result["result"].to_dict()
+                       if hasattr(pipeline_result["result"], 'to_dict')
+                       else pipeline_result["result"]),
+            "markdown": pipeline_result.get("markdown"),
+            "llm_result": pipeline_result.get("llm_result"),
+            "similar_cases": pipeline_result.get("similar_cases", []),
+            "smart_recommendations": pipeline_result.get("smart_recommendations", []),
         }
-
     except Exception as e:
-        logger.error(f"Analysis task failed: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        logger.error("Analysis task failed: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
 
 
 @bp_async.route("/analyze", methods=["POST"])
@@ -124,26 +50,27 @@ def analyze_async():
     if not file or not file.filename:
         return jsonify({"success": False, "error": "请上传文件"}), 400
 
-    # Validate file extension
-    import os
-    ext = os.path.splitext(file.filename)[1].lower()
+    safe_name = secure_filename(file.filename)
+    if not safe_name:
+        return jsonify({"success": False, "error": "文件名不合法"}), 400
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in (".html", ".htm", ".txt"):
         return jsonify({"success": False, "error": "仅支持 .html、.htm、.txt 文件"}), 400
 
-    # 读取文件内容
     file_content = file.read()
     if not file_content:
         return jsonify({"success": False, "error": "文件内容为空"}), 400
-    filename = file.filename
 
-    # 提交后台任务
-    task_id = task_manager.submit(
-        name=f"分析 {filename}",
-        func=analyze_file_task,
-        file_content=file_content,
-        filename=filename,
-        analyzer_type=analyzer_type
-    )
+    try:
+        task_id = task_manager.submit(
+            name=f"分析 {safe_name}",
+            func=analyze_file_task,
+            file_content=file_content,
+            filename=safe_name,
+            analyzer_type=analyzer_type
+        )
+    except RuntimeError as e:
+        return jsonify({"success": False, "error": str(e)}), 429
 
     return jsonify({
         "success": True,
@@ -160,11 +87,8 @@ def get_task_status(task_id):
         return jsonify({"success": False, "error": "任务不存在"}), 404
 
     response = task.to_dict()
-
-    # 如果任务完成，添加结果
     if task.status == "completed" and task.result:
         response["result"] = task.result
-
     return jsonify(response)
 
 
@@ -183,16 +107,14 @@ def view_result(task_id):
         flash("任务不存在")
         return redirect(url_for("main.index"))
 
-    if task.status == "pending" or task.status == "running":
+    if task.status in ("pending", "running"):
         return render_template("task_progress.html", task=task.to_dict())
 
     if task.status == "failed":
         flash(f"分析失败: {task.error}")
         return redirect(url_for("main.index"))
 
-    # 任务完成，显示结果
     if task.result and task.result.get("record_id"):
-        # 重定向到历史记录详情页
         return redirect(url_for("main.view_history", record_id=task.result["record_id"]))
     else:
         flash("分析结果不可用")

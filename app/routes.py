@@ -6,9 +6,8 @@ import os
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
-from app.core.registry import get_analyzer, list_analyzers
-from app.core.renderer import render_markdown
-from app.knowledge import KnowledgeBase
+from app.core.registry import list_analyzers
+from app.analysis_pipeline import kb, run_analysis
 from app.models import db
 from app.rag import get_retriever
 from app.advisor import advisor
@@ -17,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 bp = Blueprint("main", __name__)
-kb = KnowledgeBase()
 
 
 @bp.route("/", methods=["GET"])
@@ -48,7 +46,6 @@ def analyze():
         flash("仅支持 .html、.htm、.txt 文件")
         return redirect(url_for("main.index"))
 
-    analyzer = get_analyzer(analyzer_type)
     content = file.read()
 
     # Validate file content is not empty
@@ -67,7 +64,7 @@ def analyze():
             pass
 
     try:
-        result = analyzer.analyze(content)
+        pipeline = run_analysis(content, safe_name, analyzer_type, enable_deep_analysis=True)
     except NotImplementedError as exc:
         flash(str(exc))
         return redirect(url_for("main.index"))
@@ -76,137 +73,15 @@ def analyze():
         flash(f"分析失败: {exc}")
         return redirect(url_for("main.index"))
 
-    markdown = render_markdown(result)
-
-    # Extract rule engine results for learning
-    rule_results = None
-    try:
-        rules_path = os.path.join(os.path.dirname(__file__), "analyzers", "oracle_awr", "rules.yaml")
-        import yaml
-        with open(rules_path, encoding="utf-8") as f:
-            rules = yaml.safe_load(f)
-        from app.core.rule_engine import evaluate_rules_grouped
-        workload_type = (result.raw_metrics or {}).get("workload_type", "Mixed")
-        rule_results = evaluate_rules_grouped(result.raw_metrics or {}, rules, workload_type)
-    except Exception:
-        pass
-
-    # LLM enhancement (optional)
-    llm_result = None
-    deep_result = None
-    learning_feedback = None
-    llm_config = kb.load_config()
-    if llm_config.get("api_key"):
-        try:
-            from app.llm import LLMClient
-            client = LLMClient(**llm_config)
-            active_patterns = kb.get_active_patterns()
-            llm_result = client.analyze(result, result.raw_metrics or {}, active_patterns)
-            if llm_result and not llm_result.get("error"):
-                # Save case and learn patterns
-                kb.save_case(result, llm_result)
-                learned_pattern_ids = kb.learn_patterns(llm_result.get("learned_patterns", []))
-
-                # Extract learnable patterns from rule engine analysis
-                try:
-                    context = analyzer.build_analysis_context(result.raw_metrics or {})
-                    learnable = analyzer.extract_learnable_patterns(result.raw_metrics or {}, rule_results, context)
-                    if learnable:
-                        engine_learned_ids = kb.learn_patterns(learnable)
-                        learned_pattern_ids.extend(pid for pid in engine_learned_ids if pid)
-                except Exception as e:
-                    logger.warning("Learnable pattern extraction failed: %s", e)
-
-                # 生成学习反馈信息
-                learning_feedback = {
-                    "new_patterns_count": len([pid for pid in learned_pattern_ids if pid]),
-                    "new_patterns": llm_result.get("learned_patterns", []),
-                    "total_patterns": len(kb.get_all_patterns()),
-                    "active_patterns": len(kb.get_active_patterns()),
-                }
-
-            # Deep analysis (enhanced LLM with comprehensive prompt)
-            try:
-                deep_result = client.deep_analyze(result, result.raw_metrics or {}, active_patterns)
-                if deep_result and not deep_result.get("error"):
-                    result.llm_deep_analysis = deep_result
-                    # Learn patterns from deep analysis too
-                    deep_patterns = deep_result.get("learned_patterns", [])
-                    if deep_patterns:
-                        deep_learned = kb.learn_patterns(deep_patterns)
-                        if learning_feedback:
-                            learning_feedback["new_patterns_count"] += len([pid for pid in deep_learned if pid])
-            except Exception as deep_exc:
-                logger.warning("LLM deep analysis failed: %s", deep_exc)
-        except Exception as exc:
-            logger.warning("LLM enhancement failed: %s", exc)
-
-    # 保存到历史记录
-    record_id = None
-    try:
-        record_id = db.save_analysis(
-            filename=safe_name,
-            analyzer_type=analyzer_type,
-            result=result.to_dict() if hasattr(result, 'to_dict') else {},
-            llm_result=llm_result if llm_result and not llm_result.get("error") else None,
-            markdown=markdown
-        )
-    except Exception as e:
-        logger.warning("Failed to save history: %s", e)
-
-    # 检索相似案例（使用RAG向量检索）
-    similar_cases = []
-    try:
-        result_dict = result.to_dict() if hasattr(result, 'to_dict') else {}
-        main_problem = result_dict.get("main_bottleneck", "")
-        diagnosis_summary = result_dict.get("summary", "")
-
-        # 组合查询文本
-        query_text = f"{main_problem} {diagnosis_summary}"
-
-        if query_text.strip():
-            # 使用RAG检索
-            retriever = get_retriever(db)
-            rag_results = retriever.search(query_text, limit=3, min_similarity=0.1)
-
-            # 增量添加当前记录到索引，避免下次全量重建
-            if record_id:
-                retriever.add_record({
-                    'id': record_id,
-                    'main_problem': main_problem,
-                    'diagnosis_summary': diagnosis_summary,
-                    'load_type': result_dict.get("diagnosis", {}).get("load_type", ""),
-                    'filename': safe_name,
-                    'analyzer_type': analyzer_type,
-                })
-
-            # 转换为相似案例格式
-            for item in rag_results:
-                record = item['record']
-                record['similarity'] = item['similarity']
-                similar_cases.append(record)
-    except Exception as e:
-        logger.warning("Failed to get similar cases: %s", e)
-
-    # 生成智能建议
-    smart_recommendations = []
-    try:
-        smart_recommendations = advisor.generate_recommendations(result, db_identifier=None)
-    except Exception as e:
-        logger.warning("Failed to generate smart recommendations: %s", e)
-
-    # 获取知识库统计
-    kb_stats = kb.get_stats()
-
     return render_template(
         "result.html",
-        result=result,
-        markdown=markdown,
-        llm_result=llm_result,
-        similar_cases=similar_cases,
-        smart_recommendations=smart_recommendations,
-        learning_feedback=learning_feedback,
-        kb_stats=kb_stats,
+        result=pipeline["result"],
+        markdown=pipeline["markdown"],
+        llm_result=pipeline.get("llm_result"),
+        similar_cases=pipeline.get("similar_cases", []),
+        smart_recommendations=pipeline.get("smart_recommendations", []),
+        learning_feedback=pipeline.get("learning_feedback"),
+        kb_stats=pipeline.get("kb_stats", {}),
     )
 
 
