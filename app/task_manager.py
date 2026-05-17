@@ -38,20 +38,20 @@ class Task:
         try:
             self.status = TaskStatus.RUNNING
             self.started_at = datetime.now()
-            logger.info(f"Task {self.task_id} started: {self.name}")
+            logger.info("Task %s started: %s", self.task_id, self.name)
 
             self.result = self.func(*self.args, **self.kwargs)
 
             self.status = TaskStatus.COMPLETED
             self.completed_at = datetime.now()
             self.progress = 100
-            logger.info(f"Task {self.task_id} completed")
+            logger.info("Task %s completed", self.task_id)
 
         except Exception as e:
             self.status = TaskStatus.FAILED
             self.error = str(e)
             self.completed_at = datetime.now()
-            logger.error(f"Task {self.task_id} failed: {e}", exc_info=True)
+            logger.error("Task %s failed: %s", self.task_id, e, exc_info=True)
 
     def to_dict(self):
         """转换为字典"""
@@ -77,19 +77,28 @@ class TaskManager:
 
     def submit(self, name: str, func: Callable, *args, **kwargs) -> str:
         """提交一个新任务"""
-        self.cleanup_old_tasks()
-
-        task_id = str(uuid.uuid4())
-        task = Task(task_id, name, func, args, kwargs)
-
         with self._lock:
+            self.cleanup_old_tasks()
+
+            # Enforce max_workers limit
+            running_count = sum(
+                1 for t in self.tasks.values()
+                if t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+            )
+            if running_count >= self.max_workers:
+                raise RuntimeError(
+                    f"已达到最大并发任务数 ({self.max_workers})，请等待现有任务完成"
+                )
+
+            task_id = str(uuid.uuid4())
+            task = Task(task_id, name, func, args, kwargs)
             self.tasks[task_id] = task
 
-        # 在新线程中执行任务
+        # 在新线程中执行任务（在锁外启动，避免死锁）
         thread = threading.Thread(target=task.run, daemon=True)
         thread.start()
 
-        logger.info(f"Task {task_id} submitted: {name}")
+        logger.info("Task %s submitted: %s", task_id, name)
         return task_id
 
     def get_task(self, task_id: str) -> Task:
@@ -103,19 +112,18 @@ class TaskManager:
             return [task.to_dict() for task in self.tasks.values()]
 
     def cleanup_old_tasks(self, max_age_hours=24):
-        """清理旧任务"""
+        """清理旧任务 (caller must hold self._lock)."""
         now = datetime.now()
-        with self._lock:
-            to_remove = []
-            for task_id, task in self.tasks.items():
-                if task.completed_at:
-                    age = (now - task.completed_at).total_seconds() / 3600
-                    if age > max_age_hours:
-                        to_remove.append(task_id)
+        to_remove = []
+        for task_id, task in self.tasks.items():
+            if task.completed_at:
+                age = (now - task.completed_at).total_seconds() / 3600
+                if age > max_age_hours:
+                    to_remove.append(task_id)
 
-            for task_id in to_remove:
-                del self.tasks[task_id]
-                logger.info(f"Cleaned up old task: {task_id}")
+        for task_id in to_remove:
+            del self.tasks[task_id]
+            logger.info("Cleaned up old task: %s", task_id)
 
 
 # 全局任务管理器实例
