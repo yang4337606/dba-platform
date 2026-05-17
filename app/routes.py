@@ -263,8 +263,8 @@ def view_history(record_id):
             def __getattr__(self, name):
                 return self._d.get(name)
         smart_recommendations = advisor.generate_recommendations(_Result(raw_result), db_identifier=None)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to generate recommendations for history detail: %s", e)
 
     # Build similar_cases from RAG
     similar_cases = []
@@ -279,8 +279,8 @@ def view_history(record_id):
                 r = item['record']
                 r['similarity'] = item['similarity']
                 similar_cases.append(r)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to get similar cases for history detail: %s", e)
 
     return render_template(
         "history_detail.html",
