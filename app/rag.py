@@ -6,11 +6,16 @@ RAG 向量检索模块
 """
 
 import json
+import logging
 import math
 import time
 import threading
 from collections import Counter
 import re
+
+logger = logging.getLogger(__name__)
+
+MAX_TOKENS = 5000  # Upper limit on tokens per document
 
 
 class SimpleVectorizer:
@@ -27,10 +32,12 @@ class SimpleVectorizer:
         # 移除标点，转小写，分词
         text = re.sub(r'[^\w\s]', ' ', text.lower())
         tokens = text.split()
-        return [t for t in tokens if len(t) > 1]
+        tokens = [t for t in tokens if len(t) > 1]
+        # Limit token count to prevent memory explosion
+        return tokens[:MAX_TOKENS]
 
     def fit(self, documents):
-        """训练 IDF"""
+        """训练 IDF（使用平滑公式防止零值）"""
         doc_count = len(documents)
         if doc_count == 0:
             return
@@ -43,9 +50,9 @@ class SimpleVectorizer:
             for token in tokens:
                 doc_freq[token] += 1
 
-        # 计算 IDF
+        # 计算 IDF（使用平滑公式：log(1 + N/df) 防止零值）
         for token, freq in doc_freq.items():
-            self.idf[token] = math.log(doc_count / freq)
+            self.idf[token] = math.log(1 + doc_count / max(freq, 1))
 
     def vectorize(self, text):
         """将文本转换为向量"""
@@ -161,6 +168,7 @@ class RAGRetriever:
 
         query_vector = self.vectorizer.vectorize(query)
         if not query_vector:
+            logger.warning("Query produced empty vector (no valid tokens): %.100s", query)
             return []
 
         # Take a snapshot under lock to avoid iteration issues
@@ -186,14 +194,18 @@ class RAGRetriever:
         """根据记录ID搜索相似案例"""
         self._ensure_fresh()
 
-        if record_id not in self.index:
+        # Take a snapshot under lock for thread safety
+        with self._lock:
+            index_snapshot = dict(self.index)
+
+        if record_id not in index_snapshot:
             return []
 
-        query_vector = self.index[record_id]['vector']
+        query_vector = index_snapshot[record_id]['vector']
 
         # 计算相似度
         similarities = []
-        for rid, data in self.index.items():
+        for rid, data in index_snapshot.items():
             if rid == record_id:
                 continue
 
