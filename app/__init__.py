@@ -27,20 +27,16 @@ def create_app():
 
 
 def _seed_knowledge():
-    """Seed expert patterns into knowledge base on first run."""
+    """Seed expert patterns into knowledge base. Skips duplicates by name."""
     try:
         from app.knowledge import KnowledgeBase
         from app.seed_patterns import BUILTIN_PATTERNS
 
         kb = KnowledgeBase()
-        existing = kb.get_all_patterns()
-        builtin_count = sum(1 for p in existing if p.get("source") == "builtin")
-
-        if builtin_count == 0:
-            added = kb.seed_builtin_patterns(BUILTIN_PATTERNS)
-            if added:
-                import logging
-                logging.getLogger(__name__).info("Seeded %d built-in expert patterns", added)
+        added = kb.seed_builtin_patterns(BUILTIN_PATTERNS)
+        if added:
+            import logging
+            logging.getLogger(__name__).info("Seeded %d built-in expert patterns", added)
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("Knowledge seed skipped: %s", e)

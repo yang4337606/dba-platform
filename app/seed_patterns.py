@@ -441,4 +441,276 @@ BUILTIN_PATTERNS = [
         "solution": "1) 使用 PARALLEL 参数加速（但注意 CPU 和 I/O 限制）；2) 对大表使用分区 EXCLUDE/INCLUDE 减少单次数据量；3) 使用 FLASHBACK_SCN 避免一致性锁；4) impdp 使用 TABLE_EXISTS_ACTION=TRUNCATE 减少 redo；5) 专用 buffer_size 调整传输效率",
         "confidence": 0.75,
     },
+
+    # ====================================================================
+    # 扩展专家模式 v2.0 — 覆盖新因果图节点和深度生产场景
+    # ====================================================================
+
+    # ==================== 因果传播链模式 ====================
+    {
+        "name": "CPU→Latch 因果传播链",
+        "conditions": "DB CPU > 50%，同时 latch: cache buffers chains 等待 > 1%，logical_read_blocks_per_sec > 100000。高逻辑读 SQL 制造了 latch 争用",
+        "solution": "1) 根因是高逻辑读 SQL 而非 latch 本身；2) 优化 Gets/Exec 最高的 SQL 减少逻辑读量；3) latch 争用会随逻辑读下降自然消失；4) 如果无法快速优化 SQL，增大 _db_block_hash_buckets 作为临时缓解",
+        "confidence": 0.90,
+    },
+    {
+        "name": "PGA→TEMP→Storage 三层传播链",
+        "conditions": "PGA_AGGREGATE_TARGET 不足，sorts (disk) > 0 或 hash join overflow，同时 direct path read/write temp 占比 > 3%，存储 I/O 延迟上升",
+        "solution": "1) 根因是 PGA 不足导致工作区溢出；2) 增大 PGA_AGGREGATE_TARGET 是第一步；3) TEMP I/O 和存储压力会随 PGA 增大自然缓解；4) 同时检查 Hash Join 驱动表选择是否正确",
+        "confidence": 0.88,
+    },
+    {
+        "name": "Access Path→TEMP→Redo 大查询传播链",
+        "conditions": "全表扫描或 direct path read 占比高，同时 TEMP 等待 > 3%，redo size > 5MB/s。大查询同时制造读 I/O、排序溢出和 redo 压力",
+        "solution": "1) 根因是 SQL 访问路径不合理；2) 优先为大查询添加索引或分区裁剪；3) 访问路径修正后 TEMP 溢出和 redo 产出量会同步下降；4) 不要单独调 PGA 或 redo log 大小——那是治标",
+        "confidence": 0.88,
+    },
+    {
+        "name": "Storage→Redo→Commit 存储瓶颈传播链",
+        "conditions": "db file sequential read avg > 10ms，同时 log file parallel write avg > 5ms，log file sync avg > 10ms。存储慢导致 redo 写入和提交全部变慢",
+        "solution": "1) 根因是底层存储延迟；2) 将 redo log 迁移到独立的高速存储（SSD/NVMe）；3) 数据文件存储也需要升级或优化 I/O 路径；4) 在存储未升级前，减少提交频率可以缓解 log file sync",
+        "confidence": 0.90,
+    },
+    {
+        "name": "Parse→Latch→CPU 解析传播链",
+        "conditions": "hard_parses_per_sec > 200，latch: shared pool 争用明显，DB CPU 占比 > 40%。硬解析消耗 CPU 并引发共享池 latch 争用",
+        "solution": "1) 根因是缺少绑定变量导致硬解析；2) 使用绑定变量是根本方案；3) 临时缓解：cursor_sharing=FORCE + 增大 shared_pool_size；4) latch 和 CPU 问题会随硬解析下降自然消失",
+        "confidence": 0.92,
+    },
+    {
+        "name": "RAC Network→GC→Lock 跨实例传播链",
+        "conditions": "RAC 环境中 gc cr/current request 平均等待 > 5ms，gc buffer busy > 2%，同时出现跨实例的 enq: TX 锁等待",
+        "solution": "1) 检查互联网络延迟和带宽（建议 ≥10Gbps + RDS/UDP）；2) 将关联业务通过 Service 绑定到同一实例减少跨实例访问；3) 如果是热点对象，使用 Hash Partition 分散数据块；4) 增大 Sequence Cache 减少跨实例序列争用",
+        "confidence": 0.85,
+    },
+    {
+        "name": "Parallel→TEMP+RAC GC 并行查询传播链",
+        "conditions": "并行查询的 DOP > CPU 核数，TEMP 等待 > 5%，RAC 环境出现 PX Deq: Table Q 和 gc buffer busy 等待",
+        "solution": "1) 限制并行度不超过实例 CPU 核数的 50%；2) RAC 环境使用 PARALLEL_FORCE_LOCAL=TRUE 避免跨实例并行；3) 增大 PGA 减少并行排序溢出；4) 对非必要的大表并行使用 NOPARALLEL",
+        "confidence": 0.85,
+    },
+
+    # ==================== Buffer Cache 深度场景 ====================
+    {
+        "name": "Buffer Cache 被大查询冲刷",
+        "conditions": "Buffer Hit Ratio 突然下降（从 >99% 降到 <95%），同时有大查询走 scattered read 或 direct path read 转为 cached read",
+        "solution": "1) 使用 KEEP buffer pool 隔离热表：ALTER TABLE hot_table STORAGE(BUFFER_POOL KEEP)；2) 设置 DB_KEEP_CACHE_SIZE 专用缓冲池；3) 对大表报表查询强制 parallel + direct path（不经过 cache）；4) 检查 _serial_direct_read 参数",
+        "confidence": 0.85,
+    },
+    {
+        "name": "Buffer Cache 多实例 SGA 争用",
+        "conditions": "RAC 环境中某实例 Buffer Hit Ratio < 95% 但另一实例正常，db file sequential read 集中在低命中率实例",
+        "solution": "1) 检查是否业务负载不均衡导致某实例热数据超过缓存；2) 使用 Service 均衡各实例负载；3) 单独增大低命中率实例的 DB_CACHE_SIZE；4) 检查是否有大查询只在某实例执行",
+        "confidence": 0.82,
+    },
+
+    # ==================== DBWR 深度场景 ====================
+    {
+        "name": "DBWR Checkpoint 写出延迟导致日志切换阻塞",
+        "conditions": "log file switch (checkpoint incomplete) 出现，同时 db file parallel write 延迟 > 10ms，DBWR 写出速度跟不上 redo 产出速度",
+        "solution": "1) 增加 db_writer_processes（建议 CPU_COUNT/8 到 CPU_COUNT/4）；2) 确保数据文件存储开启异步 I/O（filesystemio_options=SETALL）；3) 增大 redo log 到 2-4GB 给 DBWR 更多 checkpoint 窗口；4) 检查存储写队列深度",
+        "confidence": 0.88,
+    },
+    {
+        "name": "异步 I/O 未启用导致 DBWR 串行写",
+        "conditions": "db file parallel write 延迟偏高但存储硬件正常，DBWR 单进程 CPU 使用率高，free buffer waits 偶现",
+        "solution": "1) 检查 filesystemio_options 参数（应为 SETALL 或 ASYNCH）；2) ASM 环境确认底层操作系统支持 AIO（libaio）；3) 检查 disk_asynch_io 参数是否为 TRUE；4) AIX 环境检查 aio_max_requests 是否足够",
+        "confidence": 0.85,
+    },
+
+    # ==================== 锁竞争深度场景 ====================
+    {
+        "name": "外键级联删除导致子表全表锁",
+        "conditions": "enq: TM - contention 出现在子表上，主表有 DELETE 或 UPDATE 操作，子表的外键列缺少索引",
+        "solution": "1) 这是最常见的 TM 锁根因；2) 在所有外键列上创建索引；3) 检查方法：对比 ALL_CONS_COLUMNS（R 类型）和 ALL_IND_COLUMNS；4) 创建脚本自动检测缺失的外键索引",
+        "confidence": 0.95,
+    },
+    {
+        "name": "热点行更新导致 TX 行锁堆积",
+        "conditions": "enq: TX - row lock contention 持续出现，Top SQL 中有频繁更新同一行的 UPDATE 语句（如余额表、计数器表）",
+        "solution": "1) 重新设计热点表结构（如将单行余额拆分为多行分桶）；2) 使用 SELECT ... FOR UPDATE SKIP LOCKED 跳过被锁行；3) 引入应用层缓存减少数据库更新频率；4) 对计数器使用 Oracle 12c+ 的 DBMS_LOCK.SLEEP + AUTONOMOUS_TRANSACTION",
+        "confidence": 0.90,
+    },
+    {
+        "name": "ITL（Interested Transaction List）等待",
+        "conditions": "enq: TX - allocate ITL entry 出现，某个数据块的并发更新事务数超过 INITRANS 限制",
+        "solution": "1) 增大表的 INITRANS（ALTER TABLE ... INITRANS 16 MAXTRANS 255）；2) 索引的 INITRANS 也需调整；3) 重建对象使新 INITRANS 对所有块生效；4) 对高并发更新表建议 INITRANS ≥ 16",
+        "confidence": 0.88,
+    },
+    {
+        "name": "DDL 锁阻塞 DML 操作",
+        "conditions": "enq: TM - contention 或 library cache lock 出现在 DDL 操作（CREATE INDEX、ALTER TABLE）期间，阻塞了正常 DML",
+        "solution": "1) 使用 ONLINE 选项：CREATE INDEX ... ONLINE / ALTER TABLE ... ONLINE；2) 在业务低峰执行 DDL；3) 使用 DBMS_REDEFINITION 在线重定义避免长时间锁；4) 设置 DDL_LOCK_TIMEOUT 避免无限等待",
+        "confidence": 0.88,
+    },
+
+    # ==================== 游标管理深度场景 ====================
+    {
+        "name": "子游标过多导致 cursor: mutex 争用",
+        "conditions": "cursor: mutex S 或 cursor: mutex X 等待出现，V$SQL 中某些 SQL 的 VERSION_COUNT > 100，library cache 争用",
+        "solution": "1) 检查高 VERSION_COUNT 的 SQL：SELECT sql_id, version_count FROM V$SQLAREA WHERE version_count > 50；2) 常见原因：不同 schema 执行同一 SQL、optimizer_mismatch、bind_mismatch；3) 使用 V$SQL_SHARED_CURSOR 查看不共享原因；4) 设置 _cursor_obsolete_threshold 限制子游标数",
+        "confidence": 0.88,
+    },
+    {
+        "name": "Adaptive Cursor Sharing 引发执行计划震荡",
+        "conditions": "SQL 的 IS_BIND_SENSITIVE=Y 且 VERSION_COUNT 持续增长，执行计划在 INDEX 和 FULL TABLE SCAN 之间频繁切换",
+        "solution": "1) 使用 SQL Plan Baseline 固定最优计划；2) 对数据严重倾斜的列收集直方图；3) 考虑使用 CURSOR_SHARING=EXACT + 应用层显式绑定；4) 12c+ 可以使用 SQL Patch 强制计划",
+        "confidence": 0.85,
+    },
+
+    # ==================== Redo/Commit 深度场景 ====================
+    {
+        "name": "LGWR 单点瓶颈（非存储问题）",
+        "conditions": "log file sync avg wait > 5ms 但 log file parallel write avg < 2ms，差值来自 LGWR 排队和 CPU 调度延迟",
+        "solution": "1) log file sync = LGWR post/wait + log file parallel write；2) 差值大说明 LGWR 本身有 CPU 争用或排队问题；3) 检查 LGWR 进程是否绑定到特定 CPU（不建议绑定）；4) 11.2.0.4+ 的 LGWR worker 机制可以启用：_use_adaptive_log_file_sync=TRUE",
+        "confidence": 0.82,
+    },
+    {
+        "name": "Redo 产出量与 DML 操作不匹配",
+        "conditions": "redo_size_per_sec 异常高但 commits_per_sec 和 executes_per_sec 不高，可能有大批量 DML 产生大量 redo",
+        "solution": "1) 检查是否有大表 UPDATE/DELETE/INSERT SELECT 产生大量 redo；2) 对批量操作使用 APPEND 提示减少 redo（INSERT /*+ APPEND */）；3) 对临时数据使用 NOLOGGING 减少 redo；4) 分批操作并定期 COMMIT 控制 redo 产出",
+        "confidence": 0.85,
+    },
+
+    # ==================== 网络等待深度场景 ====================
+    {
+        "name": "SQL*Net roundtrip 过多导致网络延迟",
+        "conditions": "SQL*Net message from client 占 DB Time > 15% 但 avg wait < 1ms，说明不是网络慢而是 roundtrip 次数太多",
+        "solution": "1) 增大客户端 arraysize/fetch size（JDBC: setFetchSize(200)）；2) 减少 SQL 执行频率（合并小查询为大查询）；3) 使用 BULK COLLECT 替代逐行 FETCH；4) 调大 SDU_SIZE 到 32767 减少网络分包",
+        "confidence": 0.88,
+    },
+    {
+        "name": "DBLink 跨库查询网络等待",
+        "conditions": "SQL*Net message from dblink 或 SQL*Net more data from dblink 等待占比高，SQL 中使用了 @dblink 远程访问",
+        "solution": "1) 评估是否可以将远程数据本地化（物化视图/定时同步）；2) 减少跨库数据传输量（在远程端过滤数据）；3) 使用 DRIVING_SITE hint 控制 JOIN 执行位置；4) 增大 SDU 和使用 TCP 参数优化（SEND_BUF_SIZE）",
+        "confidence": 0.85,
+    },
+
+    # ==================== Resource Manager 场景 ====================
+    {
+        "name": "Resource Manager CPU 限流导致会话排队",
+        "conditions": "resmgr:cpu quantum 等待占 DB Time > 5%，某些会话的 CPU 使用被 Resource Manager 主动限制",
+        "solution": "1) 检查 Resource Plan：SELECT * FROM DBA_RSRC_PLAN_DIRECTIVES；2) 确认限流是否为预期行为；3) 调整消费组的 CPU_P1/P2/P3 份额；4) 如果是误配置，使用 ALTER SYSTEM SET resource_manager_plan='' 临时禁用",
+        "confidence": 0.82,
+    },
+
+    # ==================== Undo 深度场景 ====================
+    {
+        "name": "一致性读导致 Undo 段争用",
+        "conditions": "enq: US - contention 出现，大量长查询需要回溯 undo 数据构建一致性读视图",
+        "solution": "1) 增大 UNDO_TABLESPACE 确保 undo 数据保留足够长；2) 设置 UNDO_RETENTION 大于最长查询时间；3) 拆分长事务减少 undo 需求；4) 检查是否有 LOB 列的 RETENTION 设置过大占用 undo",
+        "confidence": 0.85,
+    },
+
+    # ==================== Flashback/ADG 场景 ====================
+    {
+        "name": "Flashback Log 写入导致 I/O 放大",
+        "conditions": "flashback log file sync 或 flashback buf free by RVWR 等待出现，Flashback Database 启用但写入速度跟不上",
+        "solution": "1) 将 Flashback Log 放在高速存储上（独立于数据文件和 redo）；2) 如果不需要 Flashback Database 功能，考虑禁用以消除开销；3) 增大 db_flashback_retention_target 减少循环覆盖频率；4) 检查 RVWR 进程的 I/O 等待",
+        "confidence": 0.78,
+    },
+    {
+        "name": "ADG 备库 MRP 进程 apply 延迟大",
+        "conditions": "备库 V$DATAGUARD_STATS 显示 apply lag > 60 秒，recovery 相关等待出现，可能伴随 log file sequential read 高",
+        "solution": "1) 增大 recovery parallelism（ALTER DATABASE RECOVER MANAGED STANDBY DATABASE PARALLEL 8）；2) 检查备库存储 I/O 性能；3) 使用 ADG 的 Multi-Instance Redo Apply（RAC 备库）；4) 检查网络传输是否是瓶颈（V$DATAGUARD_STATS 的 transport lag）",
+        "confidence": 0.80,
+    },
+
+    # ==================== 内存管理深度场景 ====================
+    {
+        "name": "AMM（Automatic Memory Management）内存振荡",
+        "conditions": "SGA 和 PGA 大小频繁调整，出现 ORA-04031 或 SGA resize 导致短暂性能抖动",
+        "solution": "1) 不建议在大内存实例上使用 AMM（memory_target）；2) 改用 ASMM：设置 SGA_TARGET + PGA_AGGREGATE_TARGET，清除 MEMORY_TARGET；3) 固定 SGA_TARGET 避免频繁自动调整；4) 关键组件可手动设置最小值（db_cache_size, shared_pool_size）",
+        "confidence": 0.85,
+    },
+    {
+        "name": "Shared Pool 碎片化导致 ORA-04031",
+        "conditions": "ORA-04031 unable to allocate shared memory 间歇出现，shared pool free memory 总量足够但缺少连续大块",
+        "solution": "1) 减少硬解析数量是根本方案（使用绑定变量）；2) 定期 flush shared pool 仅作为紧急手段：ALTER SYSTEM FLUSH SHARED_POOL；3) 增大 shared_pool_size 减少碎片压力；4) 使用 _shared_pool_reserved_pct 预留大块内存空间",
+        "confidence": 0.85,
+    },
+
+    # ==================== 索引相关深度场景 ====================
+    {
+        "name": "索引回表过多导致性能退化",
+        "conditions": "SQL 使用索引但 TABLE ACCESS BY INDEX ROWID 行数远大于最终返回行数，Gets/Exec 高但不是全表扫描",
+        "solution": "1) 创建覆盖索引包含所有查询列避免回表；2) 如果选择性差（返回 >10% 数据），全表扫描可能更优；3) 收集列统计信息让优化器正确估算；4) 使用 Index Only Scan（覆盖索引）彻底消除回表",
+        "confidence": 0.88,
+    },
+    {
+        "name": "右增长索引热点块争用",
+        "conditions": "buffer busy waits 集中在某个索引的最右叶块，通常是主键序列递增的 B-tree 索引",
+        "solution": "1) 使用 Reverse Key Index（ALTER INDEX ... REBUILD REVERSE）分散插入点；2) 增大索引的 INITRANS 和 PCTFREE；3) RAC 环境使用 Hash Partition Index 分散热点；4) 对序列生成器增大 CACHE 值",
+        "confidence": 0.88,
+    },
+    {
+        "name": "索引统计信息过期导致全表扫描",
+        "conditions": "SQL 之前走索引但突然变为 TABLE ACCESS FULL，DBA_TAB_STATISTICS.STALE_STATS = YES，数据量增长超过 10%",
+        "solution": "1) 立即收集统计信息：DBMS_STATS.GATHER_TABLE_STATS(ownname=>'OWNER', tabname=>'TABLE', estimate_percent=>DBMS_STATS.AUTO_SAMPLE_SIZE)；2) 对关键表设置增量收集：SET_TABLE_PREFS('INCREMENTAL', 'TRUE')；3) 使用 SPM 固定好的执行计划防止统计信息变化影响",
+        "confidence": 0.90,
+    },
+
+    # ==================== 分区表深度场景 ====================
+    {
+        "name": "全局索引导致分区维护锁",
+        "conditions": "分区表 DDL 操作（DROP/TRUNCATE PARTITION）需要重建全局索引，期间全局索引不可用，查询走全表扫描",
+        "solution": "1) 使用 UPDATE INDEXES 子句在线维护：ALTER TABLE ... DROP PARTITION ... UPDATE INDEXES；2) 将全局索引改为本地索引（如果查询都包含分区键）；3) 12c+ 使用 DEFERRED INDEX INVALIDATION 推迟索引重建；4) 在业务低峰执行分区维护",
+        "confidence": 0.85,
+    },
+    {
+        "name": "分区表 Partition Exchange 导致统计信息丢失",
+        "conditions": "ALTER TABLE ... EXCHANGE PARTITION 后查询性能下降，新分区的统计信息为空或不准确",
+        "solution": "1) Exchange 后立即收集统计信息；2) 使用 DBMS_STATS.COPY_TABLE_STATS 从源表复制统计信息；3) 在 exchange 前先在 staging 表上收集统计信息（包括直方图）；4) 使用 INCLUDING INDEXES WITHOUT VALIDATION 加速 exchange",
+        "confidence": 0.82,
+    },
+
+    # ==================== 高可用/灾备场景 ====================
+    {
+        "name": "Switchover/Failover 后性能下降",
+        "conditions": "ADG 切换后新主库性能明显差于原主库，Buffer Cache 为空需要预热，执行计划可能不同",
+        "solution": "1) Buffer Cache 冷启动：使用 ALTER TABLE ... CACHE 对关键表预加载；2) 收集统计信息确保与原主库一致；3) 检查 SGA/PGA 配置是否与原主库相同；4) 使用 SQL Plan Baseline 确保执行计划一致性；5) 检查 Resource Manager 配置",
+        "confidence": 0.82,
+    },
+
+    # ==================== 多列统计和扩展统计 ====================
+    {
+        "name": "缺少多列统计导致 Cardinality 估算偏差",
+        "conditions": "执行计划中 Estimated Rows 与 Actual Rows 偏差 > 10 倍，WHERE 条件有多个列的 AND 组合但无多列统计",
+        "solution": "1) 创建扩展统计：DBMS_STATS.CREATE_EXTENDED_STATS(null, 'TABLE', '(COL1, COL2)')；2) 收集统计信息：DBMS_STATS.GATHER_TABLE_STATS 会自动包含扩展统计；3) 检查 SQL Directive：DBA_SQL_PLAN_DIRECTIVES 是否已建议多列统计；4) 使用 DBMS_STATS.SEED_COL_USAGE 播种列使用信息",
+        "confidence": 0.85,
+    },
+
+    # ==================== 系统级综合场景 ====================
+    {
+        "name": "多问题域并发（系统过载）",
+        "conditions": "AAS > CPU 核数，3 个以上问题域同时活跃（CPU + I/O + Commit + Concurrency），无单一明显根因",
+        "solution": "1) 系统处于过载状态，优先降低总负载量；2) 分析 Top SQL 消耗分布，找到占 DB Time 最大的 3-5 条 SQL 集中优化；3) 使用 Resource Manager 限制低优先级负载；4) 考虑分流读查询到 ADG 备库；5) 评估硬件扩容需求",
+        "confidence": 0.88,
+    },
+    {
+        "name": "业务高峰期性能周期性退化",
+        "conditions": "每天固定时段（如 9:00-10:00、14:00-15:00）AAS 飙升，Top SQL 变化不大但并发会话数量翻倍",
+        "solution": "1) 这是典型的并发量超出系统能力问题；2) 使用连接池限制最大并发（建议 CPU_COUNT * 2-4）；3) 检查是否有批处理与 OLTP 混合执行；4) 使用 Resource Manager 按时段调整资源分配；5) 对读查询分流到 ADG 备库",
+        "confidence": 0.85,
+    },
+    {
+        "name": "数据库补丁/升级后性能回退",
+        "conditions": "PSU/RU 补丁安装后或大版本升级后 SQL 性能下降，新特性或优化器行为变化导致执行计划改变",
+        "solution": "1) 使用 SQL Plan Baseline 固定升级前的好计划；2) 设置 optimizer_features_enable 回退到旧版本行为（临时方案）；3) 检查 DBA_SQL_PLAN_BASELINES 是否有自动捕获的旧计划；4) 使用 STS（SQL Tuning Set）+RATS（Real Application Testing）测试补丁影响",
+        "confidence": 0.85,
+    },
+
+    # ==================== ORM/应用框架常见问题 ====================
+    {
+        "name": "Hibernate/JPA 生成低效 SQL",
+        "conditions": "Top SQL 中有大量带 WHERE 1=1、多层嵌套子查询或 N+1 模式的 SQL，SQL 文本含 ORM 框架特征（如 hibernate 注释）",
+        "solution": "1) 检查 JPA/Hibernate 的 fetch 策略（EAGER vs LAZY）；2) 使用 @NamedQuery 或原生 SQL 替代复杂 JPQL；3) 启用二级缓存减少数据库查询；4) 使用 JOIN FETCH 替代 N+1；5) 检查 hibernate.default_batch_fetch_size 配置",
+        "confidence": 0.88,
+    },
+    {
+        "name": "MyBatis 动态 SQL 导致硬解析",
+        "conditions": "hard_parses_per_sec 偏高，Top SQL 中有大量结构相同但 WHERE 条件数量不同的 SQL（动态拼接）",
+        "solution": "1) MyBatis 的 <if> 标签导致 SQL 结构变化，每种组合产生不同的 SQL_ID；2) 将高频查询改为固定结构 + 绑定变量；3) 使用 WHERE 1=1 AND col = NVL(:val, col) 替代动态条件；4) 增大 shared_pool_size 作为缓解",
+        "confidence": 0.88,
+    },
 ]
