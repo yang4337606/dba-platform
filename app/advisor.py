@@ -4,7 +4,11 @@
 基于数据库画像和历史记录，提供个性化优化建议
 """
 
+import logging
+
 from app.models import db
+
+logger = logging.getLogger(__name__)
 
 
 class SmartAdvisor:
@@ -19,7 +23,8 @@ class SmartAdvisor:
 
         # 获取诊断信息
         result_dict = result.to_dict() if hasattr(result, 'to_dict') else {}
-        main_problem = result_dict.get("diagnosis", {}).get("main_problem", "")
+        main_problem = result_dict.get("diagnosis", {}).get("main_problem", "") or ""
+        main_problem_lower = main_problem.lower()
         metrics = result_dict.get("metrics", {})
 
         # 获取数据库画像
@@ -27,30 +32,39 @@ class SmartAdvisor:
         if db_identifier:
             profile = self.db.get_profile(db_identifier)
 
-        # 基于主要问题生成建议
-        if "CPU" in main_problem or "cpu" in main_problem.lower():
-            recommendations.extend(self._cpu_recommendations(metrics, profile))
+        # 预计算已优化关键词集合（避免重复遍历）
+        optimized_keywords = set()
+        if profile and profile.get("optimized_items"):
+            for item in profile["optimized_items"]:
+                optimized_keywords.add(item.lower())
 
-        if "IO" in main_problem or "io" in main_problem.lower() or "读写" in main_problem:
+        # 基于主要问题生成建议
+        if "cpu" in main_problem_lower:
+            recommendations.extend(self._cpu_recommendations(metrics, profile, optimized_keywords))
+
+        if "io" in main_problem_lower or "读写" in main_problem:
             recommendations.extend(self._io_recommendations(metrics, profile))
 
-        if "log file sync" in main_problem.lower():
-            recommendations.extend(self._log_file_sync_recommendations(metrics, profile))
+        if "log file sync" in main_problem_lower:
+            recommendations.extend(self._log_file_sync_recommendations(metrics, profile, optimized_keywords))
 
-        if "锁" in main_problem or "lock" in main_problem.lower() or "latch" in main_problem.lower():
+        if "锁" in main_problem or "lock" in main_problem_lower or "latch" in main_problem_lower:
             recommendations.extend(self._lock_recommendations(metrics, profile))
 
         # 基于历史案例生成建议
         if main_problem:
-            similar_cases = self.db.get_similar_cases(main_problem, limit=3)
-            if similar_cases:
-                recommendations.append({
-                    "priority": "P2",
-                    "category": "历史经验",
-                    "action": f"参考历史案例：过去 {len(similar_cases)} 次遇到类似问题",
-                    "reason": "查看历史记录了解之前的处理方式和效果",
-                    "historical": True
-                })
+            try:
+                similar_cases = self.db.get_similar_cases(main_problem, limit=3)
+                if similar_cases:
+                    recommendations.append({
+                        "priority": "P2",
+                        "category": "历史经验",
+                        "action": f"参考历史案例：过去 {len(similar_cases)} 次遇到类似问题",
+                        "reason": "查看历史记录了解之前的处理方式和效果",
+                        "historical": True
+                    })
+            except Exception as e:
+                logger.warning("Failed to fetch similar cases: %s", e)
 
         # 去重和排序
         recommendations = self._deduplicate(recommendations, profile)
@@ -58,7 +72,7 @@ class SmartAdvisor:
 
         return recommendations
 
-    def _cpu_recommendations(self, metrics, profile):
+    def _cpu_recommendations(self, metrics, profile, optimized_keywords):
         """CPU相关建议"""
         recommendations = []
 
@@ -80,9 +94,7 @@ class SmartAdvisor:
             })
 
         # 检查是否已优化过
-        if profile and profile.get("optimized_items"):
-            optimized = profile["optimized_items"]
-            if not any("索引" in item or "index" in item.lower() for item in optimized):
+        if not any("索引" in kw or "index" in kw for kw in optimized_keywords):
                 recommendations.append({
                     "priority": "P2",
                     "category": "索引优化",
@@ -112,7 +124,7 @@ class SmartAdvisor:
 
         return recommendations
 
-    def _log_file_sync_recommendations(self, metrics, profile):
+    def _log_file_sync_recommendations(self, metrics, profile, optimized_keywords):
         """log file sync相关建议"""
         recommendations = []
 
@@ -124,9 +136,7 @@ class SmartAdvisor:
         })
 
         # 检查是否已优化过
-        if profile and profile.get("optimized_items"):
-            optimized = profile["optimized_items"]
-            if not any("redo" in item.lower() or "日志" in item for item in optimized):
+        if not any("redo" in kw or "日志" in kw for kw in optimized_keywords):
                 recommendations.append({
                     "priority": "P2",
                     "category": "日志优化",
@@ -164,6 +174,12 @@ class SmartAdvisor:
         optimized_items = profile["optimized_items"]
         filtered = []
 
+        # Bilingual keyword list for matching
+        match_keywords = [
+            "索引", "index", "redo", "日志", "buffer", "缓冲",
+            "锁", "lock", "latch", "cpu", "内存", "memory",
+        ]
+
         for rec in recommendations:
             # 检查是否已优化
             action = rec["action"].lower()
@@ -171,9 +187,9 @@ class SmartAdvisor:
 
             for item in optimized_items:
                 item_lower = item.lower()
-                # 简单的关键词匹配
+                # 关键词匹配（中英双语）
                 if any(keyword in action and keyword in item_lower
-                       for keyword in ["索引", "index", "redo", "日志", "buffer", "锁"]):
+                       for keyword in match_keywords):
                     already_done = True
                     break
 
