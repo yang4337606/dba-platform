@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import requests
@@ -56,7 +57,16 @@ class LLMClient:
             return parsed
         except Exception as e:
             logger.error("LLM analysis failed: %s", e)
-            return {"error": str(e), "expert_analysis": "", "key_findings": [], "sql_recommendations": [], "parameter_suggestions": [], "learned_patterns": []}
+            return {
+                "error": str(e),
+                "expert_analysis": "LLM 分析失败，请检查网络连接或 API 配置。",
+                "key_findings": [],
+                "sql_recommendations": [],
+                "parameter_suggestions": [],
+                "learned_patterns": [],
+                "_raw_response": "",
+                "_error": str(e),
+            }
 
     def deep_analyze(self, result: Any, metrics: dict[str, Any], active_patterns: list[dict] | None = None) -> dict[str, Any] | None:
         """Enhanced deep analysis with comprehensive prompt and larger output."""
@@ -118,6 +128,7 @@ class LLMClient:
         max_retries = 2
         timeout = 60  # 60 seconds per attempt
         last_error = None
+        resp = None
 
         for attempt in range(max_retries + 1):
             try:
@@ -129,34 +140,34 @@ class LLMClient:
                     error_data = resp.json()
                     error_msg = error_data.get("error", {}).get("message", str(e))
                 except Exception:
-                    error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}" if resp is not None else str(e)
 
                 # Don't retry on auth errors or bad requests
-                if resp.status_code in (400, 401, 403, 404):
+                if resp is not None and resp.status_code in (400, 401, 403, 404):
                     raise Exception(f"API 请求失败: {error_msg}") from e
 
                 last_error = Exception(f"API 请求失败: {error_msg}")
                 if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)  # 1s, 2s
+                    time.sleep(min(60, 2 ** (attempt + 1)))  # 2s, 4s (capped at 60s)
                     continue
                 raise last_error from e
 
             except requests.exceptions.Timeout as e:
                 last_error = Exception(f"请求超时 ({timeout}s)，请检查网络或减少输入数据量")
                 if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
+                    time.sleep(min(60, 2 ** (attempt + 1)))
                     continue
                 raise last_error from e
 
             except requests.exceptions.RequestException as e:
                 last_error = Exception(f"网络请求失败: {str(e)}")
                 if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
+                    time.sleep(min(60, 2 ** (attempt + 1)))
                     continue
                 raise last_error from e
+
+        if resp is None:
+            raise Exception("请求失败：未获得响应")
 
         # Parse JSON response
         try:
@@ -219,7 +230,7 @@ class LLMClient:
         wait_classes = metrics.get("wait_classes", [])
         if wait_classes:
             lines.append("【Wait Class 汇总】")
-            for wc in wait_classes:
+            for wc in wait_classes[:30]:  # Limit to prevent oversized prompts
                 name = wc.get("wait_class", "")
                 pct = wc.get("pct_db_time", 0)
                 if pct and float(str(pct).replace(",", "")) > 0.1:
@@ -333,9 +344,16 @@ class LLMClient:
                 reason = beh.get("reason", "")
                 score = beh.get("efficiency_score", 0)
                 text_info = beh.get("text_analysis", {})
+                if not isinstance(text_info, dict):
+                    text_info = {}
                 plan_info = beh.get("plan_analysis", {})
+                if not isinstance(plan_info, dict):
+                    plan_info = {}
                 lines.append(f"  {sql_id} [{category}] 效率={score}/100")
-                lines.append(f"    分析: {reason}")
+                if reason:
+                    lines.append(f"    分析: {reason}")
+                else:
+                    lines.append("    分析: （无）")
                 for diag in text_info.get("diagnostics", []):
                     lines.append(f"    问题: {diag}")
                 if plan_info.get("access_path"):
@@ -597,6 +615,29 @@ class LLMClient:
                     parsed[key] = "" if key == "expert_analysis" else []
                 elif key != "expert_analysis" and not isinstance(parsed[key], list):
                     parsed[key] = []
+
+            # Validate list contents — filter out malformed entries
+            if "learned_patterns" in parsed:
+                parsed["learned_patterns"] = [
+                    p for p in parsed["learned_patterns"]
+                    if isinstance(p, dict) and p.get("pattern_name")
+                ]
+            if "key_findings" in parsed:
+                parsed["key_findings"] = [
+                    f for f in parsed["key_findings"]
+                    if isinstance(f, dict) and f.get("title")
+                ]
+            if "sql_recommendations" in parsed:
+                parsed["sql_recommendations"] = [
+                    r for r in parsed["sql_recommendations"]
+                    if isinstance(r, dict) and (r.get("sql_id") or r.get("issue"))
+                ]
+            if "parameter_suggestions" in parsed:
+                parsed["parameter_suggestions"] = [
+                    s for s in parsed["parameter_suggestions"]
+                    if isinstance(s, dict) and s.get("parameter")
+                ]
+
             return parsed
 
         # Fallback: treat entire response as expert_analysis
