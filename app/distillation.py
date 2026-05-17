@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import uuid
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -31,7 +35,6 @@ class DistillationEngine:
         patterns = self.kb.get_all_patterns()
 
         # Load cases
-        import os
         cases_path = os.path.join(self.kb.knowledge_dir, "cases.json")
         try:
             with open(cases_path, "r", encoding="utf-8") as f:
@@ -66,7 +69,6 @@ class DistillationEngine:
         # Backup before any changes
         backup_path = self.kb.backup_knowledge("before_distill")
 
-        import os
         cases_path = os.path.join(self.kb.knowledge_dir, "cases.json")
         patterns_path = os.path.join(self.kb.knowledge_dir, "patterns.json")
 
@@ -85,10 +87,15 @@ class DistillationEngine:
 
             # Protect builtin patterns from merging
             involved = [(pid, patterns[pid]) for pid in ids if pid in patterns]
-            has_builtin = any(p.get("source") == "builtin" for _, p in involved)
-            if has_builtin:
-                summary["protected"] += 1
-                continue
+            builtin_ids = {pid for pid, p in involved if p.get("source") == "builtin"}
+            non_builtin = [(pid, p) for pid, p in involved if pid not in builtin_ids]
+
+            if builtin_ids:
+                summary["protected"] += len(builtin_ids)
+                # If there are non-builtin patterns left, merge them among themselves
+                if len(non_builtin) < 2:
+                    continue
+                involved = non_builtin
 
             # Find survivor (highest hit_count)
             survivors = involved
@@ -99,9 +106,19 @@ class DistillationEngine:
 
             # Merge stats
             total_hits = sum(p.get("hit_count", 0) for _, p in survivors)
-            latest_hit = max(
-                (p.get("last_hit_at", "") for _, p in survivors),
-                default=survivor.get("last_hit_at", ""),
+            # Parse timestamps to datetime for correct comparison
+            parsed_timestamps = []
+            for _, p in survivors:
+                ts = p.get("last_hit_at", "")
+                if ts:
+                    try:
+                        parsed_timestamps.append(datetime.fromisoformat(ts))
+                    except (ValueError, TypeError):
+                        pass
+            latest_hit = (
+                max(parsed_timestamps).isoformat()
+                if parsed_timestamps
+                else survivor.get("last_hit_at", "")
             )
 
             survivor["name"] = merged_data.get("name", survivor["name"])
@@ -134,9 +151,9 @@ class DistillationEngine:
             summary["refined"] += 1
 
         # 3. New patterns
-        import uuid
         for np in report.get("new_patterns", []):
             new_id = str(uuid.uuid4())[:8]
+            now_iso = datetime.utcnow().isoformat()
             patterns[new_id] = {
                 "id": new_id,
                 "name": np.get("name", ""),
@@ -146,8 +163,8 @@ class DistillationEngine:
                 "confidence": DISTILLATION_CONFIDENCE,
                 "hit_count": 0,
                 "miss_streak": 0,
-                "created_at": __import__("datetime").datetime.utcnow().isoformat(),
-                "last_hit_at": __import__("datetime").datetime.utcnow().isoformat(),
+                "created_at": now_iso,
+                "last_hit_at": now_iso,
                 "status": "candidate",
             }
             summary["new"] += 1
@@ -307,21 +324,24 @@ class DistillationEngine:
         except (json.JSONDecodeError, TypeError):
             pass
 
-        # Tier 2: code block
-        import re
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if match:
-            try:
-                result = json.loads(match.group(1))
-                if isinstance(result, dict):
-                    return result
-            except (json.JSONDecodeError, TypeError):
-                pass
+        # Tier 2: code block — use bracket matching for nested JSON
+        code_block_match = re.search(r"```(?:json)?\s*", text)
+        if code_block_match:
+            block_start = code_block_match.end()
+            json_str = self._extract_balanced_json(text[block_start:])
+            if json_str:
+                try:
+                    result = json.loads(json_str)
+                    if isinstance(result, dict):
+                        return result
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        # Tier 3: first { to last } (with size limit to prevent JSON bombs)
+        # Tier 3: first { to last } (with configurable size limit)
+        max_json_size = int(os.environ.get("MAX_DISTILL_JSON_SIZE", 500_000))
         first = text.find("{")
         last = text.rfind("}")
-        if first != -1 and last > first and (last - first) < 100_000:
+        if first != -1 and last > first and (last - first) < max_json_size:
             try:
                 result = json.loads(text[first:last + 1])
                 if isinstance(result, dict):
@@ -329,4 +349,34 @@ class DistillationEngine:
             except (json.JSONDecodeError, TypeError):
                 pass
 
+        return None
+
+    @staticmethod
+    def _extract_balanced_json(text: str) -> str | None:
+        """Extract a balanced JSON object from text using bracket matching."""
+        first = text.find("{")
+        if first == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for i, c in enumerate(text[first:], first):
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                if in_string:
+                    escape = True
+                continue
+            if c == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[first:i + 1]
         return None
