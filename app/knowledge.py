@@ -299,7 +299,11 @@ class KnowledgeBase:
             "key_metrics": key_metrics,
             "top_sql_ids": [s.get("sql_id", "") for s in top_sql[:5]],
             "llm_summary": (llm_result.get("expert_analysis", "") or "")[:500],
-            "learned_pattern_ids": [p.get("pattern_name", "") for p in llm_result.get("learned_patterns", [])],
+            "learned_pattern_ids": [
+                p.get("pattern_name", "")
+                for p in (llm_result.get("learned_patterns") or [])
+                if isinstance(p, dict) and p.get("pattern_name")
+            ],
             "created_at": datetime.utcnow().isoformat(),
         }
 
