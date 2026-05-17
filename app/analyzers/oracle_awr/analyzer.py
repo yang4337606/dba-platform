@@ -31,14 +31,53 @@ def _load_rules():
             _RULES_CACHE = yaml.safe_load(f)
     return _RULES_CACHE
 CAUSE_GRAPH = {
-    "access_path": ["temp", "redo", "hot_block"],
-    "temp": ["redo"],
-    "storage": ["redo", "hot_block"],
-    "redo": ["hot_block"],
-    "sql_cpu": ["temp", "redo", "hot_block"],
-    "parse_cpu": ["redo"],
-    "rac_gc": ["hot_block"],
-    "hot_block": [],
+    # ============================================================
+    # 扩展因果图 v2.0 — 25 个节点覆盖主要 Oracle 故障传播路径
+    #
+    # 读法: A → [B, C] 表示问题 A 可能向 B 和 C 传播
+    # 终端节点（无下游）是最终症状，根节点（不被引用）是典型根因
+    # ============================================================
+
+    # --- SQL 执行层（根因区）---
+    "sql_cpu":      ["temp", "redo", "hot_block", "storage", "latch"],
+    "access_path":  ["temp", "redo", "hot_block", "storage", "parallel"],
+    "parse_cpu":    ["redo", "latch", "cursor"],
+
+    # --- 内存/PGA 层 ---
+    "temp":         ["redo", "storage"],
+    "pga_memory":   ["temp", "storage"],
+    "buffer_cache": ["storage", "hot_block"],
+
+    # --- 并发/锁层 ---
+    "hot_block":    ["latch"],
+    "hot_object":   ["lock", "latch"],
+    "lock":         ["latch"],
+    "cursor":       ["latch"],
+    "latch":        [],           # 终端：闩锁争用是最终症状
+
+    # --- 存储/IO 层 ---
+    "storage":      ["redo", "hot_block", "dbwr"],
+    "dbwr":         ["buffer_cache", "hot_block"],
+
+    # --- Redo/日志层 ---
+    "redo":         ["hot_block", "commit"],
+    "commit":       [],           # 终端：提交等待
+
+    # --- RAC 层 ---
+    "rac_gc":       ["hot_block", "lock", "network"],
+    "rac_network":  ["rac_gc"],
+
+    # --- 网络/应用层 ---
+    "network":      [],           # 终端：网络等待
+    "parallel":     ["temp", "rac_gc", "storage"],
+
+    # --- 资源管理层 ---
+    "resource_mgr": ["sql_cpu"],  # Resource Manager 限流导致 CPU 排队
+    "undo":         ["lock", "storage"],
+
+    # --- ADG/Flashback 层 ---
+    "adg_transport": ["redo", "storage"],
+    "flashback":    ["storage", "redo"],
 }
 
 
@@ -388,10 +427,28 @@ class OracleAwrAnalyzer(AnalyzerBase):
 
         chains = self.build_root_cause_chains(context)
         if chains:
-            if chains[0]["key"] in ("sql_cpu", "parse_cpu"):
-                return "CPU"
-            if chains[0]["key"] == "rac_gc":
-                return "RAC Global Cache"
+            chain_key = chains[0]["key"]
+            # Map chain keys to human-readable bottleneck names
+            bottleneck_names = {
+                "sql_cpu": "CPU",
+                "parse_cpu": "SQL 解析",
+                "rac_gc": "RAC Global Cache",
+                "rac_network": "RAC 互联网络",
+                "latch": "Latch 争用",
+                "cursor": "游标管理异常",
+                "commit": "事务提交",
+                "pga_memory": "PGA 内存不足",
+                "buffer_cache": "Buffer Cache 不足",
+                "dbwr": "DBWR 写出瓶颈",
+                "network": "网络传输",
+                "parallel": "并行查询",
+                "resource_mgr": "Resource Manager 限流",
+                "undo": "Undo 压力",
+                "hot_object": "热点对象锁竞争",
+                "lock": "锁争用",
+            }
+            if chain_key in bottleneck_names:
+                return bottleneck_names[chain_key]
             return chains[0]["name"]
 
         main = next(domain for domain in context.problem_domains if domain.role == "main")
@@ -1039,11 +1096,29 @@ class OracleAwrAnalyzer(AnalyzerBase):
             {
                 "key": "hot_block",
                 "name": "并发/热点块等待",
-                "domains": ["hot_block", "hot_object", "lock_contention", "Concurrency"],
-                "events": ["buffer busy waits", "read by other session", "enq:", "latch", "gc buffer busy"],
-                "reason": "存在并发、热点块、热点对象或锁/闩锁竞争信号，可能由高并发访问同一对象、热点更新或阻塞链路引起。",
-                "recommendation": "检查 buffer busy waits、read by other session、enq/latch 等等待事件，定位热点对象、阻塞会话、热点 SQL 和事务边界。",
-                "summary": "并发热点或锁等待可能正在放大响应时间",
+                "domains": ["hot_block", "Concurrency"],
+                "events": ["buffer busy waits", "read by other session", "gc buffer busy"],
+                "reason": "存在并发、热点块或读竞争信号，可能由高并发访问同一对象或热点索引块引起。",
+                "recommendation": "检查 buffer busy waits、read by other session、热点对象、热点 SQL 和并发访问模式。",
+                "summary": "并发热点块等待可能正在放大响应时间",
+            },
+            {
+                "key": "hot_object",
+                "name": "热点对象/锁竞争",
+                "domains": ["hot_object"],
+                "events": ["enq: tx - row lock", "enq: tm", "enq: hw"],
+                "reason": "存在热点对象、行锁或表级锁竞争信号，可能由热点更新、外键缺失索引或 DDL 操作引起。",
+                "recommendation": "检查 enq: TX/TM 等待、阻塞会话树、热点对象的 DML 模式和外键索引。",
+                "summary": "热点对象锁竞争是事务延迟的重要原因",
+            },
+            {
+                "key": "lock",
+                "name": "锁争用链路",
+                "domains": ["lock_contention", "Application"],
+                "events": ["enq:", "row lock contention", "library cache lock"],
+                "reason": "锁争用信号明显，可能存在事务锁、DDL 锁、游标锁或热点更新导致的会话阻塞。",
+                "recommendation": "检查阻塞会话树、锁等待链路、事务隔离级别和热点对象访问模式。",
+                "summary": "锁争用可能导致会话堆积和响应时间恶化",
             },
             {
                 "key": "sql_cpu",
@@ -1071,6 +1146,106 @@ class OracleAwrAnalyzer(AnalyzerBase):
                 "reason": "RAC Global Cache 等待偏高，可能存在跨实例缓存争用、热点块跨节点传输或互联网络瓶颈。",
                 "recommendation": "检查 gc 等待事件、互联网络延迟、热点对象跨节点访问、并行查询跨实例执行和 SQL 执行计划。",
                 "summary": "RAC Global Cache 等待需要结合互联网络和热点对象分析",
+            },
+            # --- 新增链路类型 ---
+            {
+                "key": "latch",
+                "name": "Latch/闩锁争用",
+                "domains": ["Concurrency"],
+                "events": ["latch:", "latch free", "latch: cache buffers chains", "latch: shared pool", "latch: library cache"],
+                "reason": "Latch 争用通常是上游问题（高逻辑读、高解析、热点块）的放大症状，需要追溯根因。",
+                "recommendation": "定位 Latch 类型：cache buffers chains → 逻辑读过高；shared pool → 硬解析过多；library cache → 游标共享问题。",
+                "summary": "Latch 争用是其他问题的放大症状，需要向上追溯根因",
+            },
+            {
+                "key": "cursor",
+                "name": "游标管理异常",
+                "domains": ["parse_pressure"],
+                "events": ["cursor: mutex", "cursor: pin s wait on x", "cursor: pin x", "cursor mutex"],
+                "reason": "游标管理存在异常，可能因绑定变量不足导致大量子游标，或存在游标泄漏问题。",
+                "recommendation": "检查 V$SQL 子游标数量、cursor_sharing 参数、OPEN_CURSORS 限制和应用游标关闭行为。",
+                "summary": "游标异常通常由绑定变量不足或游标泄漏引起",
+            },
+            {
+                "key": "commit",
+                "name": "事务提交等待",
+                "domains": ["Commit"],
+                "events": ["log file sync"],
+                "reason": "事务提交等待可能由频繁小事务提交或 redo 写入延迟引起，需要区分应用问题和存储问题。",
+                "recommendation": "检查 commits/s、log file sync 平均等待和 log file parallel write 平均等待来区分根因。",
+                "summary": "提交等待需要区分是应用频繁提交还是存储写入慢",
+            },
+            {
+                "key": "pga_memory",
+                "name": "PGA 内存不足",
+                "domains": ["Memory"],
+                "events": ["pga memory", "workarea:", "sort segment"],
+                "reason": "PGA 内存不足导致排序/Hash 操作溢出到磁盘 TEMP 空间，放大 I/O 等待。",
+                "recommendation": "检查 PGA Advisory、PGA_AGGREGATE_TARGET 配置、TOP SQL 的 sorts (disk) 和 Hash Join 工作区。",
+                "summary": "PGA 不足导致溢写是 TEMP 和 I/O 问题的常见根因",
+            },
+            {
+                "key": "buffer_cache",
+                "name": "Buffer Cache 不足",
+                "domains": ["User I/O"],
+                "events": ["free buffer waits", "buffer cache"],
+                "reason": "Buffer Cache 命中率偏低或 free buffer waits 出现，导致过多物理读和 DBWR 写压力。",
+                "recommendation": "检查 Buffer Hit Ratio、DB_CACHE_SIZE、free buffer waits 和 DBWR 写出延迟。",
+                "summary": "Buffer Cache 不足导致物理读增加和 DBWR 压力",
+            },
+            {
+                "key": "dbwr",
+                "name": "DBWR 写出瓶颈",
+                "domains": [],
+                "events": ["free buffer waits", "db file parallel write", "write complete waits"],
+                "reason": "DBWR 写出速度跟不上脏块产生速度，导致 free buffer waits 和缓存淘汰问题。",
+                "recommendation": "增加 db_writer_processes、检查存储写延迟、增大 DB_CACHE_SIZE 或启用异步 I/O。",
+                "summary": "DBWR 写出瓶颈通常由存储写延迟或缓存偏小引起",
+            },
+            {
+                "key": "network",
+                "name": "网络传输等待",
+                "domains": ["Network", "network_wait"],
+                "events": ["sql*net message", "sql*net more data"],
+                "reason": "网络等待占比较高，可能由客户端处理慢、网络延迟大或 SQL 返回大量数据引起。",
+                "recommendation": "检查 SQL 返回行数、增大客户端 arraysize/fetch size、优化网络链路。",
+                "summary": "网络等待通常需要从应用端和网络端同时排查",
+            },
+            {
+                "key": "parallel",
+                "name": "并行查询资源争用",
+                "domains": [],
+                "events": ["px deq", "px send", "px receive", "parallel query"],
+                "reason": "并行查询存在协调等待，可能由并行度设置不当、跨节点执行或资源争用引起。",
+                "recommendation": "检查并行度设置、DOP 与 CPU 核数比例、并行操作的对象和 parallel_max_servers 参数。",
+                "summary": "并行查询等待可能放大 TEMP 和 RAC GC 等待",
+            },
+            {
+                "key": "rac_network",
+                "name": "RAC 互联网络瓶颈",
+                "domains": ["rac_global_cache"],
+                "events": ["gc cr request", "gc current request", "gc cr grant", "gc current grant"],
+                "reason": "RAC 互联网络延迟偏高，数据块跨节点传输效率下降。",
+                "recommendation": "检查互联网络带宽和延迟、gc 事件平均等待、是否使用 UDP/RDS、网卡配置和交换机。",
+                "summary": "互联网络瓶颈会放大所有 GC 等待事件",
+            },
+            {
+                "key": "resource_mgr",
+                "name": "Resource Manager 限流",
+                "domains": [],
+                "events": ["resmgr:", "resmgr:cpu quantum", "resmgr:pq"],
+                "reason": "Resource Manager 正在限制 CPU 或并行资源，导致会话排队等待。",
+                "recommendation": "检查 Resource Manager 计划配置、消费组分配和 CPU 限制设置，确认是否需要调整。",
+                "summary": "Resource Manager 限流可能掩盖真实的 CPU 需求",
+            },
+            {
+                "key": "undo",
+                "name": "Undo/事务回滚压力",
+                "domains": [],
+                "events": ["enq: us", "undo segment", "snapshot too old", "enq: tx - allocate"],
+                "reason": "Undo 空间或事务回滚存在压力，可能出现 ORA-01555 或 undo 段争用。",
+                "recommendation": "增大 UNDO 表空间和 UNDO_RETENTION、拆分长事务、检查 undo segment 争用。",
+                "summary": "Undo 压力通常由长事务或 undo 空间不足引起",
             },
         ]
 
@@ -1151,8 +1326,14 @@ class OracleAwrAnalyzer(AnalyzerBase):
             redo_value = sum(safe_float(d.value) for d in redo_chain.get("domains", []))
             if redo_value >= 30:
                 return [redo_chain]
-        # Otherwise prefer sql_cpu, parse_cpu, redo, temp, access_path as root
-        for key in ("sql_cpu", "parse_cpu", "rac_gc", "redo", "temp", "access_path", "storage"):
+        # Prefer root causes over symptoms; latch/commit/network are terminal nodes
+        root_priority = (
+            "sql_cpu", "parse_cpu", "access_path", "rac_network", "rac_gc",
+            "redo", "temp", "pga_memory", "buffer_cache", "storage",
+            "hot_object", "lock", "parallel", "resource_mgr", "undo",
+            "hot_block", "cursor", "dbwr", "network", "commit", "latch",
+        )
+        for key in root_priority:
             if key in chain_map:
                 return [chain_map[key]]
         return chains[:1]
@@ -1203,9 +1384,23 @@ class OracleAwrAnalyzer(AnalyzerBase):
             "Redo/LGWR 写入链路异常": "redo 写入链路阻塞会表现为 log buffer、log file sync 或日志切换等待，并可能继续放大提交和并发等待。",
             "SQL/CPU 执行消耗": "高 CPU 或高逻辑读 SQL 会制造更多访问路径和 I/O 压力，最终体现为 DB Time 上升。",
             "存储 I/O 链路等待": "存储 I/O 等待可能源自 SQL 访问路径问题或存储能力不足，并向 redo/checkpoint 和并发等待传播。",
-            "并发/热点块等待": "热点对象或锁竞争会放大其他等待事件的影响，导致响应时间恶化。",
+            "并发/热点块等待": "热点块争用会放大 latch 和锁等待，导致并发会话响应时间恶化。",
             "SQL 解析消耗过高": "大量硬解析或游标共享问题直接消耗 CPU 和共享池资源，可能间接影响其他 SQL 的解析性能。",
             "RAC Global Cache 等待": "跨实例缓存争用增加了数据块传输延迟，可能因热点对象或不当的数据分区策略导致。",
+            # 新增链路解释
+            "热点对象/锁竞争": "热点对象上的行锁或表锁竞争导致会话阻塞，压力向 latch 和其他并发等待传播。",
+            "锁争用链路": "事务锁、DDL 锁或游标锁争用导致会话排队，可能由应用设计或外键缺失索引引起。",
+            "Latch/闩锁争用": "Latch 争用通常是上游问题的最终症状——高逻辑读导致 cache buffers chains latch，高解析导致 shared pool latch。",
+            "游标管理异常": "游标异常（过多子游标、游标泄漏）消耗共享池资源并引发 latch 争用。",
+            "事务提交等待": "提交等待可能由应用频繁小事务提交引起（应用层根因），也可能由 redo 写入延迟引起（存储层根因）。",
+            "PGA 内存不足": "PGA 不足导致排序和 Hash Join 溢出到 TEMP 磁盘空间，放大 I/O 等待和 SQL 响应时间。",
+            "Buffer Cache 不足": "Buffer Cache 偏小导致命中率下降，物理读增加，进而推高存储 I/O 等待和 DBWR 压力。",
+            "DBWR 写出瓶颈": "DBWR 无法及时写出脏块导致 free buffer waits，迫使前台进程等待可用缓冲区。",
+            "网络传输等待": "网络等待通常由客户端取数慢或 SQL 返回大量数据引起，是最终症状而非根因。",
+            "并行查询资源争用": "并行查询的协调等待可能放大 TEMP 使用、RAC GC 通信和存储 I/O 压力。",
+            "RAC 互联网络瓶颈": "互联网络延迟高会放大所有 GC 相关等待，是 RAC 环境中跨实例性能问题的常见根因。",
+            "Resource Manager 限流": "Resource Manager 主动限制 CPU 或并行资源，导致会话排队。如果是预期行为则无需处理。",
+            "Undo/事务回滚压力": "Undo 空间不足或长事务导致 ORA-01555、undo 段争用，影响一致性读和事务处理。",
         }
         if root_name in explanations:
             return explanations[root_name]
@@ -1244,10 +1439,23 @@ class OracleAwrAnalyzer(AnalyzerBase):
             "temp": "TEMP/PGA 与发生溢写的 SQL",
             "access_path": "Top SQL by Reads 和访问路径",
             "storage": "存储等待与 Top SQL by Reads",
-            "hot_block": "热点对象、阻塞链路和并发等待",
+            "hot_block": "热点对象、并发访问模式和 buffer busy 等待",
+            "hot_object": "热点对象的 DML 模式、行锁和表级锁",
+            "lock": "阻塞会话树、锁等待链路和事务边界",
             "sql_cpu": "Top SQL",
             "parse_cpu": "绑定变量、Hard Parses 和游标共享",
             "rac_gc": "RAC 互联网络和跨实例热点对象",
+            "rac_network": "RAC 互联网络带宽、延迟和网卡配置",
+            "latch": "Latch 类型分析和上游根因追溯",
+            "cursor": "子游标数量、cursor_sharing 和游标泄漏",
+            "commit": "提交频率、log file sync 和 redo 写延迟",
+            "pga_memory": "PGA Advisory、PGA_AGGREGATE_TARGET 和溢写 SQL",
+            "buffer_cache": "Buffer Hit Ratio、DB_CACHE_SIZE 和 free buffer waits",
+            "dbwr": "DBWR 写延迟、db_writer_processes 和存储写性能",
+            "network": "SQL 返回行数、客户端 fetch 行为和网络延迟",
+            "parallel": "并行度设置、DOP 和 parallel_max_servers",
+            "resource_mgr": "Resource Manager 计划、消费组和 CPU 限制",
+            "undo": "UNDO 表空间大小、UNDO_RETENTION 和长事务",
         }
         return actions.get(chain["key"], "Top SQL")
 
