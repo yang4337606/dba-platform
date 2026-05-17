@@ -73,7 +73,7 @@ class LLMClient:
             return {"error": str(e)}
 
     def _call(self, prompt: str, max_tokens: int = 4096) -> str:
-        """Call OpenAI-compatible chat completions API."""
+        """Call OpenAI-compatible chat completions API with retry."""
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -114,19 +114,49 @@ class LLMClient:
             ],
         }
 
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=180)
-            resp.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            # Try to extract error message from response
+        # Retry with exponential backoff (up to 2 retries)
+        max_retries = 2
+        timeout = 60  # 60 seconds per attempt
+        last_error = None
+
+        for attempt in range(max_retries + 1):
             try:
-                error_data = resp.json()
-                error_msg = error_data.get("error", {}).get("message", str(e))
-            except Exception:
-                error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
-            raise Exception(f"API 请求失败: {error_msg}") from e
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"网络请求失败: {str(e)}") from e
+                resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+                resp.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                try:
+                    error_data = resp.json()
+                    error_msg = error_data.get("error", {}).get("message", str(e))
+                except Exception:
+                    error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+
+                # Don't retry on auth errors or bad requests
+                if resp.status_code in (400, 401, 403, 404):
+                    raise Exception(f"API 请求失败: {error_msg}") from e
+
+                last_error = Exception(f"API 请求失败: {error_msg}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)  # 1s, 2s
+                    continue
+                raise last_error from e
+
+            except requests.exceptions.Timeout as e:
+                last_error = Exception(f"请求超时 ({timeout}s)，请检查网络或减少输入数据量")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                raise last_error from e
+
+            except requests.exceptions.RequestException as e:
+                last_error = Exception(f"网络请求失败: {str(e)}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                raise last_error from e
 
         # Parse JSON response
         try:
@@ -524,33 +554,50 @@ class LLMClient:
         return "\n".join(lines)
 
     def _parse_response(self, text: str) -> dict[str, Any]:
-        """Parse LLM response with three-tier fallback."""
-        empty = {"expert_analysis": "", "key_findings": [], "sql_recommendations": [], "parameter_suggestions": [], "learned_patterns": []}
+        """Parse LLM response with three-tier fallback and schema validation."""
+        required_keys = {"expert_analysis", "key_findings", "sql_recommendations",
+                         "parameter_suggestions", "learned_patterns"}
+        empty = {k: "" if k == "expert_analysis" else [] for k in required_keys}
+
         if not text:
             return empty
 
+        parsed = None
+
         # Tier 1: direct JSON
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             pass
 
         # Tier 2: code block
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except (json.JSONDecodeError, TypeError):
-                pass
+        if parsed is None:
+            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group(1))
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        # Tier 3: first { to last }
-        first = text.find("{")
-        last = text.rfind("}")
-        if first != -1 and last > first:
-            try:
-                return json.loads(text[first:last + 1])
-            except (json.JSONDecodeError, TypeError):
-                pass
+        # Tier 3: first { to last } (with size limit to prevent JSON bombs)
+        if parsed is None:
+            first = text.find("{")
+            last = text.rfind("}")
+            if first != -1 and last > first and (last - first) < 100_000:
+                try:
+                    parsed = json.loads(text[first:last + 1])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        # Validate and normalize
+        if parsed is not None and isinstance(parsed, dict):
+            # Ensure all required keys exist with correct types
+            for key in required_keys:
+                if key not in parsed:
+                    parsed[key] = "" if key == "expert_analysis" else []
+                elif key != "expert_analysis" and not isinstance(parsed[key], list):
+                    parsed[key] = []
+            return parsed
 
         # Fallback: treat entire response as expert_analysis
         empty["expert_analysis"] = text
