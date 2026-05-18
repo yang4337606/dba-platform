@@ -28,28 +28,36 @@
     {# ===== Statistics Cards ===== #}
     <div class="stats-grid">
         <div class="stat-card">
-            <div class="stat-icon">📊</div>
+            <div class="stat-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>
+            </div>
             <div class="stat-content">
                 <div class="stat-label">总记录数</div>
                 <div class="stat-value">{{ stats.total_records }}</div>
             </div>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">📈</div>
+            <div class="stat-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+            </div>
             <div class="stat-content">
                 <div class="stat-label">最近7天</div>
                 <div class="stat-value">{{ stats.recent_records }}</div>
             </div>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">⏱️</div>
+            <div class="stat-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            </div>
             <div class="stat-content">
                 <div class="stat-label">平均 DB Time</div>
                 <div class="stat-value">{{ "%.1f"|format(stats.avg_db_time) }} min</div>
             </div>
         </div>
         <div class="stat-card">
-            <div class="stat-icon">⚡</div>
+            <div class="stat-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+            </div>
             <div class="stat-content">
                 <div class="stat-label">平均 AAS</div>
                 <div class="stat-value">{{ "%.2f"|format(stats.avg_aas) }}</div>
@@ -281,16 +289,32 @@ new Chart(document.getElementById('cpuChart'), {
 
 .stat-card {
     background: var(--card-bg);
-    border-radius: 8px;
-    padding: 1.5rem;
+    border-radius: var(--radius-md);
+    padding: 1.25rem 1.5rem;
     display: flex;
     align-items: center;
     gap: 1rem;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border);
+    transition: all var(--transition-fast);
+}
+
+.stat-card:hover {
+    border-color: rgba(59, 130, 246, 0.25);
+    transform: translateY(-1px);
     box-shadow: var(--shadow-md);
 }
 
 .stat-icon {
-    font-size: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    color: var(--accent-light);
+    flex-shrink: 0;
 }
 
 .stat-content {
@@ -311,10 +335,11 @@ new Chart(document.getElementById('cpuChart'), {
 
 .chart-container {
     background: var(--card-bg);
-    border-radius: 8px;
-    padding: 2rem;
-    box-shadow: var(--shadow-md);
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
     height: 300px;
+    border: 1px solid var(--border);
 }
 
 .time-select {

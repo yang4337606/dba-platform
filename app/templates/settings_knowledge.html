@@ -4,7 +4,7 @@
 
 {% block content %}
 <main class="page-content">
-    <section class="workspace-section" style="max-width: 720px;">
+    <section class="workspace-section" style="max-width: 680px; margin: 0 auto;">
         <div class="section-heading">
             <p class="eyebrow">Knowledge</p>
             <h2>知识管理</h2>
@@ -28,7 +28,7 @@
                 <tr><td class="ev-name">历史案例</td><td class="ev-value">{{ stats.total_cases }}</td></tr>
             </table>
             {% if builtin_count == 0 %}
-            <div class="distill-hint" style="border-left-color: var(--accent); color: #8fc0ff;">
+            <div class="distill-hint" style="border-left-color: var(--accent); color: var(--accent-light);">
                 尚未注入专家知识，建议先点击下方按钮加载 DBA 预置诊断模式
             </div>
             {% endif %}

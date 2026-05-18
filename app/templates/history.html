@@ -81,8 +81,9 @@
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     background: var(--card-bg);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
 }
 
 .data-table {
@@ -91,39 +92,49 @@
 }
 
 .data-table thead {
-    background: rgba(59, 130, 246, 0.1);
+    background: rgba(59, 130, 246, 0.08);
 }
 
 .data-table th {
-    padding: 1rem;
+    padding: 0.875rem 1rem;
     text-align: left;
     font-weight: 600;
-    color: var(--text);
-    border-bottom: 2px solid var(--border);
+    font-size: 13px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
 }
 
 .data-table td {
-    padding: 1rem;
-    border-bottom: 1px solid var(--border);
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
     color: var(--text);
+    font-size: 14px;
 }
 
 .data-table tbody tr {
-    transition: background 0.2s;
+    transition: background var(--transition-fast);
+}
+
+.data-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.012);
 }
 
 .data-table tbody tr:hover {
-    background: rgba(59, 130, 246, 0.05);
+    background: rgba(59, 130, 246, 0.06);
 }
 
 .badge {
     display: inline-block;
-    padding: 0.25rem 0.75rem;
-    background: rgba(59, 130, 246, 0.2);
-    color: var(--primary);
-    border-radius: 12px;
-    font-size: 0.875rem;
-    font-weight: 500;
+    padding: 0.2rem 0.65rem;
+    background: var(--accent-soft);
+    color: var(--accent-light);
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
 }
 
 .btn-link {
@@ -131,7 +142,8 @@
     text-decoration: none;
     margin-right: 1rem;
     font-weight: 500;
-    transition: color 0.2s;
+    font-size: 13px;
+    transition: color var(--transition-fast);
 }
 
 .btn-link:hover {
@@ -149,33 +161,20 @@
 
 .empty-state {
     text-align: center;
-    padding: 4rem 2rem;
+    padding: 5rem 2rem;
     color: var(--muted);
 }
 
 .empty-state h3 {
     color: var(--text);
     margin-bottom: 0.5rem;
+    font-size: 18px;
 }
 
-.btn {
-    display: inline-block;
-    padding: 0.75rem 1.5rem;
-    border-radius: 6px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    text-decoration: none;
-    border: none;
-}
-
-.btn-primary {
-    background: var(--primary);
-    color: white;
-}
-
-.btn-primary:hover {
-    background: var(--primary-hover);
+.empty-state p {
+    font-size: 14px;
+    max-width: 360px;
+    margin: 0 auto;
 }
 </style>
 {% endblock %}

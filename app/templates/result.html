@@ -8,7 +8,10 @@
 
     {# ===== Top Bar ===== #}
     <div class="top-bar">
-        <a href="{{ url_for('main.index') }}">&larr; 返回上传</a>
+        <a href="{{ url_for('main.index') }}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            返回上传
+        </a>
         <div class="top-bar-right">
             {% if llm_result and not llm_result.get('error') %}
             <span class="ai-badge">AI Enhanced</span>
@@ -20,7 +23,19 @@
         </div>
     </div>
 
+    {# ===== Section TOC ===== #}
+    <nav class="result-toc" id="result-toc">
+        <a href="#section-summary" class="toc-item active">概要</a>
+        {% if result.conclusions %}<a href="#section-conclusions" class="toc-item">结论</a>{% endif %}
+        {% if result.abnormal_findings %}<a href="#section-findings" class="toc-item">异常</a>{% endif %}
+        {% if result.root_causes %}<a href="#section-causes" class="toc-item">原因</a>{% endif %}
+        {% if result.root_cause_flows %}<a href="#section-flows" class="toc-item">传播链</a>{% endif %}
+        <a href="#section-evidence" class="toc-item">证据</a>
+        {% if result.recommendations %}<a href="#section-recs" class="toc-item">建议</a>{% endif %}
+    </nav>
+
     {# ===== Summary ===== #}
+    <div id="section-summary">
     <p class="eyebrow">Diagnosis Result</p>
     <h1>{{ result.title }}</h1>
 
@@ -36,8 +51,11 @@
         </div>
     </div>
 
+    </div>
+
     {# ===== Section 1: Conclusions ===== #}
-    <section>
+    {% if result.conclusions %}
+    <section id="section-conclusions">
         <h2>诊断结论</h2>
         <div class="conclusion-grid">
             {% for item in result.conclusions %}
@@ -48,10 +66,11 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
 
     {# ===== Section 2: Findings ===== #}
     {% if result.abnormal_findings %}
-    <section>
+    <section id="section-findings">
         <h2>异常发现</h2>
         <div class="findings-list">
             {% for finding in result.abnormal_findings %}
@@ -71,7 +90,7 @@
 
     {# ===== Section 3: Root Causes ===== #}
     {% if result.root_causes %}
-    <section>
+    <section id="section-causes">
         <h2>原因分析</h2>
         <ol class="cause-list">
             {% for cause in result.root_causes %}
@@ -83,7 +102,7 @@
 
     {# ===== Section 4: Propagation Chain ===== #}
     {% if result.root_cause_flows %}
-    <section>
+    <section id="section-flows">
         <h2>问题传播链</h2>
         {% for flow in result.root_cause_flows %}
         <div class="flow-block">
@@ -381,7 +400,7 @@
     {% endif %}
 
     {# ===== Section 6: Evidence (Tab-based) ===== #}
-    <section>
+    <section id="section-evidence">
         <h2>关键证据</h2>
         <div class="evidence-tabs">
             <div class="tab-nav">
@@ -628,7 +647,7 @@
 
     {# ===== Section 8: Recommendations ===== #}
     {% if result.recommendations %}
-    <section>
+    <section id="section-recs">
         <h2>处理建议</h2>
         <div class="rec-list">
             {% for rec in result.recommendations %}
@@ -678,5 +697,30 @@ function switchTab(event, tabId) {
     event.target.classList.add('active');
     document.getElementById(tabId).classList.add('active');
 }
+
+// TOC scroll spy
+(function() {
+    const toc = document.getElementById('result-toc');
+    if (!toc) return;
+    const links = toc.querySelectorAll('.toc-item');
+    const sections = [];
+    links.forEach(link => {
+        const id = link.getAttribute('href').slice(1);
+        const el = document.getElementById(id);
+        if (el) sections.push({ el: el, link: link });
+    });
+
+    function updateActive() {
+        let current = sections[0];
+        for (const s of sections) {
+            if (s.el.getBoundingClientRect().top <= 120) current = s;
+        }
+        links.forEach(l => l.classList.remove('active'));
+        if (current) current.link.classList.add('active');
+    }
+
+    window.addEventListener('scroll', updateActive, { passive: true });
+    updateActive();
+})();
 </script>
 {% endblock %}
