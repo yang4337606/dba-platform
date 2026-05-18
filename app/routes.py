@@ -61,7 +61,7 @@ def analyze():
                 flash("文件内容不像有效的 HTML 文件")
                 return redirect(url_for("main.index"))
         except (UnicodeDecodeError, AttributeError):
-            pass
+            logger.debug("HTML content validation skipped due to decode/attribute error")
 
     try:
         pipeline = run_analysis(content, safe_name, analyzer_type, enable_deep_analysis=True)

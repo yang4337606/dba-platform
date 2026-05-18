@@ -233,8 +233,8 @@ def extract_awr_metrics(parsed_data):
     metrics["table_scan_pk_count"] = 0  # Computed from segment data
     metrics["sql_with_type_conversion_count"] = 0  # Computed from SQL text analysis
 
-    # Session cursor cache usage (for cursor leak detection)
-    metrics["session_cached_cursors_pct"] = 0  # Requires OPEN_CURSORS param which is not in AWR
+    # Session cursor cache usage — placeholder; actual value requires OPEN_CURSORS param not in AWR
+    metrics["session_cached_cursors_pct"] = 0
 
     # Undo retention violations
     metrics["undo_retention_violations_count"] = find_instance_activity(instance_activity, "undo change vector size", "total")
@@ -888,7 +888,7 @@ def analyze_execution_plan(plan):
     has_hash_join = False
     has_merge_join = False
     has_sort = False
-    has_filter = False
+    # has_filter removed — was assigned but never consumed
     high_cost_ops = []
     table_access_by_index = False
 

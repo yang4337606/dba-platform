@@ -68,7 +68,7 @@ class DistillationEngine:
         # Backup before any changes
         backup_path = self.kb.backup_knowledge("before_distill")
 
-        cases_path = os.path.join(self.kb.knowledge_dir, "cases.json")  # noqa: F841 — reserved for future case-level distillation
+        # cases_path reserved for future case-level distillation
         patterns_path = os.path.join(self.kb.knowledge_dir, "patterns.json")
 
         with open(patterns_path, "r", encoding="utf-8") as f:
