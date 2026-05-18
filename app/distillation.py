@@ -179,10 +179,13 @@ class DistillationEngine:
                 self.kb._update_pattern_status(patterns[pid])
                 summary["adjusted"] += 1
 
-        # 5. Suppressed patterns
+        # 5. Suppressed patterns (protect builtin patterns from suppression)
         for sp in report.get("suppressed_patterns", []):
             pid = sp.get("pattern_id")
             if pid not in patterns:
+                continue
+            if patterns[pid].get("source") == "builtin":
+                summary["protected"] += 1
                 continue
             patterns[pid]["status"] = "suppressed"
             summary["suppressed"] += 1

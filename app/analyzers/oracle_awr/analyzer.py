@@ -827,8 +827,8 @@ class OracleAwrAnalyzer(AnalyzerBase):
             evidence["PGA/SGA Advisory"] = advisory_items
 
         # IO Stats by tablespace
-        avg_read_lat = metrics.get("io_stats_avg_read_latency_ms", 0)
-        if avg_read_lat:
+        avg_read_lat = metrics.get("io_stats_avg_read_latency_ms")
+        if avg_read_lat is not None:
             io_items = [
                 EvidenceItem("平均读延迟", f"{avg_read_lat}ms"),
                 EvidenceItem("平均写延迟", f"{metrics.get('io_stats_avg_write_latency_ms', 0)}ms"),
@@ -844,9 +844,9 @@ class OracleAwrAnalyzer(AnalyzerBase):
             evidence["IO Stats (按表空间)"] = io_items
 
         # Foreground Wait Class
-        fg_cpu = metrics.get("foreground_db_cpu_pct", 0)
+        fg_cpu = metrics.get("foreground_db_cpu_pct")
         fg_top = metrics.get("fg_top_wait_class", "")
-        if fg_cpu or fg_top:
+        if fg_cpu is not None or fg_top:
             evidence["Foreground Wait Class"] = [
                 EvidenceItem("前台 DB CPU", f"{fg_cpu}%"),
                 EvidenceItem("前台 Top Wait Class", f"{fg_top} ({metrics.get('fg_top_wait_pct', 0)}%)"),
@@ -880,8 +880,8 @@ class OracleAwrAnalyzer(AnalyzerBase):
             ("Redo NoWait Ratio", "redo_nowait_ratio"),
             ("Non-Parse CPU", "non_parse_cpu_ratio"),
         ]:
-            val = metrics.get(key, 0)
-            if val:
+            val = metrics.get(key)
+            if val is not None:
                 status = "OK" if _efficiency_ok(key, val) else "LOW"
                 ie_items.append(EvidenceItem(name, f"{val}%", status))
         if ie_items:
@@ -1505,7 +1505,7 @@ class OracleAwrAnalyzer(AnalyzerBase):
             "CPU": "CPU 消耗偏高",
             "User I/O": "User I/O 等待",
             "Commit": "Commit 等待",
-            "Configuration": "Redo/Checkpoint 配置异常" if domain.name == "Configuration" else "Configuration 等待",
+            "Configuration": "Redo/Checkpoint 配置异常",
             "Concurrency": "并发等待",
             "Application": "应用等待",
             "Network": "网络等待",
@@ -1559,6 +1559,8 @@ class OracleAwrAnalyzer(AnalyzerBase):
 
     def format_number(self, value):
         number = safe_float(value)
+        if abs(number) < 0.005:
+            return "0"
         text = f"{number:.2f}".rstrip("0").rstrip(".")
         return text or "0"
 
@@ -1723,17 +1725,17 @@ class OracleAwrAnalyzer(AnalyzerBase):
     def host_info_evidence(self, metrics):
         evidence = []
         cpu_count = metrics.get("cpu_count", 0)
-        if cpu_count:
-            evidence.append(EvidenceItem("CPU Count", int(cpu_count)))
-        idle = metrics.get("host_cpu_idle_pct", 0)
-        if idle:
+        if cpu_count is not None and cpu_count != "":
+            evidence.append(EvidenceItem("CPU Count", int(safe_float(cpu_count))))
+        idle = metrics.get("host_cpu_idle_pct")
+        if idle is not None:
             evidence.append(EvidenceItem("Host CPU Idle", f"{idle}%"))
         load_begin = metrics.get("load_average_begin", 0)
         load_end = metrics.get("load_average_end", 0)
         if load_begin or load_end:
             evidence.append(EvidenceItem("Load Average", f"Begin: {load_begin}, End: {load_end}"))
-        db_cpu_pct = metrics.get("db_instance_cpu_pct", 0)
-        if db_cpu_pct:
+        db_cpu_pct = metrics.get("db_instance_cpu_pct")
+        if db_cpu_pct is not None and db_cpu_pct != 0:
             evidence.append(EvidenceItem("DB Instance CPU%", f"{db_cpu_pct}%"))
         return evidence
 
@@ -1808,7 +1810,7 @@ class OracleAwrAnalyzer(AnalyzerBase):
                 action=f"SGA_TARGET: 建议从 {int(sga_current)}MB 增大到 {int(sga_optimal)}MB",
                 reason=f"SGA Advisory 估计改进空间 {sga_benefit}%，Buffer Hit Ratio {buffer_hit}%。",
             ))
-        elif buffer_hit < 95 and buffer_hit > 0:
+        elif buffer_hit < 95 and buffer_hit >= 0 and metrics.get("buffer_hit_ratio") is not None:
             recs.append(Recommendation(
                 priority="P3",
                 action=f"db_cache_size / SGA: 建议增大 buffer cache（Buffer Hit Ratio={buffer_hit}% < 95%）",
@@ -1826,7 +1828,7 @@ class OracleAwrAnalyzer(AnalyzerBase):
                 action=f"shared_pool_size: 建议增大（Library Cache Hit={lib_hit}%，Hard Parses={hard_parses}/s）",
                 reason="Library Cache 命中率低，共享池可能偏小或绑定变量使用不足。",
             ))
-        elif soft_parse < 80 and soft_parse > 0:
+        if soft_parse < 80 and soft_parse > 0:
             recs.append(Recommendation(
                 priority="P2",
                 action=f"session_cached_cursors: 建议增大到 200+（Soft Parse Ratio={soft_parse}%）",
@@ -2103,9 +2105,9 @@ class OracleAwrAnalyzer(AnalyzerBase):
         enq_tm = metrics.get("enq_tm_contention_pct_db_time", 0) or 0
         if enq_tx >= 3 or enq_tm >= 3:
             lock_events = []
-            if enq_tx:
+            if enq_tx >= 3:
                 lock_events.append(f"TX Row Lock {enq_tx}%")
-            if enq_tm:
+            if enq_tm >= 3:
                 lock_events.append(f"TM Contention {enq_tm}%")
             recs.append(Recommendation(
                 priority="P1",

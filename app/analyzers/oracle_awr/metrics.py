@@ -97,9 +97,12 @@ def extract_awr_metrics(parsed_data):
     metrics["rollback_ratio"] = round(rollbacks * 100 / (commits + rollbacks), 1) if (commits + rollbacks) else 0
 
     # Wait class percentages derived from top_events
+    # Use DB Time (not elapsed time) as denominator for consistency with other pct_db_time metrics
     top_events = metrics.get("top_events", [])
-    elapsed = metrics.get("elapsed_minutes", 1) or 1
-    total_time_s = elapsed * 60
+    db_time_s = (metrics.get("db_time_minutes", 0) or 0) * 60
+    if db_time_s <= 0:
+        # Fallback to elapsed time if DB Time is not available
+        db_time_s = (metrics.get("elapsed_minutes", 1) or 1) * 60
 
     # GC (RAC) percentage
     gc_time_s = sum(
@@ -107,7 +110,7 @@ def extract_awr_metrics(parsed_data):
         for evt in top_events
         if "gc" in str(evt.get("event", "")).lower()
     )
-    metrics["gc_pct_db_time"] = round(gc_time_s * 100 / (total_time_s or 1), 1) if gc_time_s else 0
+    metrics["gc_pct_db_time"] = round(gc_time_s * 100 / (db_time_s or 1), 1) if gc_time_s else 0
 
     # Latch percentage
     latch_time_s = sum(
@@ -115,7 +118,7 @@ def extract_awr_metrics(parsed_data):
         for evt in top_events
         if "latch" in str(evt.get("event", "")).lower()
     )
-    metrics["latch_pct_db_time"] = round(latch_time_s * 100 / (total_time_s or 1), 1) if latch_time_s else 0
+    metrics["latch_pct_db_time"] = round(latch_time_s * 100 / (db_time_s or 1), 1) if latch_time_s else 0
 
     # Network percentage
     net_time_s = sum(
@@ -123,7 +126,7 @@ def extract_awr_metrics(parsed_data):
         for evt in top_events
         if "sql*net" in str(evt.get("event", "")).lower()
     )
-    metrics["net_pct_db_time"] = round(net_time_s * 100 / (total_time_s or 1), 1) if net_time_s else 0
+    metrics["net_pct_db_time"] = round(net_time_s * 100 / (db_time_s or 1), 1) if net_time_s else 0
 
     # TEMP percentage (direct path read/write temp)
     temp_time_s = sum(
@@ -131,7 +134,7 @@ def extract_awr_metrics(parsed_data):
         for evt in top_events
         if "direct path" in str(evt.get("event", "")).lower() and "temp" in str(evt.get("event", "")).lower()
     )
-    metrics["temp_pct_db_time"] = round(temp_time_s * 100 / (total_time_s or 1), 1) if temp_time_s else 0
+    metrics["temp_pct_db_time"] = round(temp_time_s * 100 / (db_time_s or 1), 1) if temp_time_s else 0
 
     # --- Phase 1: Activate previously unused parsed data ---
 
@@ -230,14 +233,14 @@ def extract_awr_metrics(parsed_data):
     metrics["n1_pattern_sql_count"] = 0  # Computed later from behaviors
     metrics["plan_change_sql_count"] = 0  # Computed later from plan analysis
     metrics["partition_all_count"] = 0  # Computed from execution plans
-    metrics["table_scan_pk_count"] = 0  # Computed from segment data
+    # NOTE: table_scan_pk_count already computed at line ~191 from segment data; do NOT overwrite
     metrics["sql_with_type_conversion_count"] = 0  # Computed from SQL text analysis
 
     # Session cursor cache usage — placeholder; actual value requires OPEN_CURSORS param not in AWR
     metrics["session_cached_cursors_pct"] = 0
 
     # Undo retention violations
-    metrics["undo_retention_violations_count"] = find_instance_activity(instance_activity, "undo change vector size", "total")
+    metrics["undo_retention_violations_count"] = find_instance_activity(instance_activity, "transaction tables consistent read rollbacks", "total")
     # ORA-01555 count (snapshot too old)
     ora_1555 = 0
     for row in top_events:
@@ -1045,8 +1048,13 @@ def parse_pga_sga_advisory(rows, kind):
     current_size = 0
     for row in rows:
         size_mb = safe_float(row.get("size_mb") or row.get("pga_target_for_estimate") or row.get("sga_size") or 0)
-        benefit = safe_float(row.get("estd_extra_pct") or row.get("estd_over_alloc_count") or row.get("estd_pct_of_db_time_for_reads") or 0)
         factor = safe_float(row.get("size_factor") or row.get("pga_target_factor") or row.get("sga_size_factor") or 0)
+
+        # Use the semantically correct field for each advisory type
+        if kind == "pga":
+            benefit = safe_float(row.get("estd_extra_pct") or row.get("estd_pct_of_db_time_for_reads") or 0)
+        else:
+            benefit = safe_float(row.get("estd_extra_pct") or row.get("estd_pct_of_db_time_for_reads") or 0)
 
         # The row with factor ~1.0 is the current size
         if 0.9 <= factor <= 1.1 and size_mb > 0:

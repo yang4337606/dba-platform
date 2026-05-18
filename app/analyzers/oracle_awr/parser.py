@@ -103,7 +103,7 @@ def _decode_input(input_data) -> str:
         for encoding in ("utf-8", "gb18030", "latin-1", "gbk", "gb2312", "big5", "utf-16"):
             try:
                 decoded = input_data.decode(encoding)
-                if "<" in decoded or "table" in decoded.lower():
+                if "<html" in decoded.lower() or "<table" in decoded.lower() or "<!doctype" in decoded.lower():
                     return decoded
             except (UnicodeDecodeError, LookupError):
                 continue

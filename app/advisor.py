@@ -93,8 +93,8 @@ class SmartAdvisor:
                 "reason": f"DB CPU使用率 {cpu_percent:.1f}%，有优化空间"
             })
 
-        # 检查是否已优化过
-        if not any("索引" in kw or "index" in kw for kw in optimized_keywords):
+            # 检查是否已优化过
+            if not any("索引" in kw or "index" in kw for kw in optimized_keywords):
                 recommendations.append({
                     "priority": "P2",
                     "category": "索引优化",

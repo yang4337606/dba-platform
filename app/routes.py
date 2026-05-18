@@ -106,7 +106,7 @@ def settings():
     masked_key = ""
     if config.get("api_key"):
         key = config["api_key"]
-        masked_key = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
+        masked_key = key[:4] + "****" + key[-4:] if len(key) > 12 else "****"
     return render_template("settings.html", config=config, masked_key=masked_key)
 
 
@@ -343,6 +343,7 @@ def compare_result():
 def trends():
     """性能趋势分析"""
     days = request.args.get("days", default=30, type=int)
+    days = max(1, min(days, 365))  # Clamp to reasonable range
     analyzer_type = request.args.get("analyzer_type", default=None)
 
     # 获取趋势数据

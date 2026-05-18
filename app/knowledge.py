@@ -101,7 +101,7 @@ class KnowledgeBase:
     def get_active_patterns(self) -> list[dict]:
         """Get all active patterns for LLM context."""
         data = self._read_patterns_cached()
-        return [p for p in data.get("patterns", []) if p.get("status") in ("active", "observed")]
+        return [p for p in data.get("patterns", []) if p.get("status") in ("active", "observed", "candidate")]
 
     def get_all_patterns(self) -> list[dict]:
         data = self._read_patterns_cached()

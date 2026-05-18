@@ -85,7 +85,8 @@ def _run_rule_engine(result):
         from app.core.rule_engine import evaluate_rules_grouped
         workload_type = (result.raw_metrics or {}).get("workload_type", "Mixed")
         return evaluate_rules_grouped(result.raw_metrics or {}, rules, workload_type)
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).warning("Rule engine failed: %s", e, exc_info=True)
         return None
 
 

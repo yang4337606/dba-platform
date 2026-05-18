@@ -372,7 +372,7 @@ class LLMClient:
         # === 12. Known Patterns ===
         if active_patterns:
             lines.append("【已知诊断模式（历史积累）】")
-            for p in active_patterns[:5]:
+            for p in active_patterns[:15]:
                 lines.append(f"  - {p.get('name', '')}: {p.get('conditions', '')} → {p.get('solution', '')}")
             lines.append("")
 
