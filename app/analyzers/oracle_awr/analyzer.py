@@ -1809,8 +1809,6 @@ class OracleAwrAnalyzer(AnalyzerBase):
                 reason=f"SGA Advisory 估计改进空间 {sga_benefit}%，Buffer Hit Ratio {buffer_hit}%。",
             ))
         elif buffer_hit < 95 and buffer_hit > 0:
-            cpu_count = metrics.get("cpu_count", 0) or 4
-            suggested_sga = max(4096, int(cpu_count * 1024))
             recs.append(Recommendation(
                 priority="P3",
                 action=f"db_cache_size / SGA: 建议增大 buffer cache（Buffer Hit Ratio={buffer_hit}% < 95%）",
@@ -1886,7 +1884,6 @@ class OracleAwrAnalyzer(AnalyzerBase):
 
         for cat, rules in by_category.items():
             if len(rules) >= 2:
-                names = [r.get("finding", r.get("id", "")) for r in rules[:4]]
                 severity_levels = [r.get("severity", "OBSERVE") for r in rules]
                 max_sev = "HIGH" if "HIGH" in severity_levels else "WARNING" if "WARNING" in severity_levels else "OBSERVE"
                 patterns.append({
@@ -1957,7 +1954,6 @@ class OracleAwrAnalyzer(AnalyzerBase):
     def _infer_causal_chains(self, metrics, context):
         """Dynamic cross-metric causal inference — not limited to predefined rules."""
         recs = []
-        workload = metrics.get("workload_type", "Mixed")
 
         # 1. High CPU + High Gets → SQL execution plan issue
         cpu_pct = metrics.get("db_cpu_pct_db_time", 0) or 0
@@ -1976,7 +1972,6 @@ class OracleAwrAnalyzer(AnalyzerBase):
         read_io = metrics.get("read_io_mb_per_sec", 0) or 0
         io_pct = metrics.get("user_io_pct_db_time", 0) or 0
         if phys >= 20000 and io_pct >= 10:
-            blocks_per_mb = phys / max(read_io, 1) if read_io else 0
             recs.append(Recommendation(
                 priority="P1",
                 action=f"物理读+I/O 关联: Physical Reads {phys}/s，Read IO {read_io}MB/s，User I/O {io_pct}% DB Time",

@@ -635,13 +635,11 @@ def classify_event_semantics(events):
 
     for event in events:
         event_name = str(event.get("event", "")).lower()
-        matched = False
         for semantic, patterns in EVENT_SEMANTICS.items():
             if any(pattern in event_name for pattern in patterns):
                 semantic_groups[semantic]["pct_db_time"] += safe_float(event.get("pct_db_time"))
                 semantic_groups[semantic]["time_s"] += safe_float(event.get("time_s"))
                 semantic_groups[semantic]["events"].append(event)
-                matched = True
                 break  # Each event matches only the first semantic group
 
     return semantic_groups

@@ -5,7 +5,6 @@ RAG 向量检索模块
 如需更强大的语义匹配，可替换为 sentence-transformers
 """
 
-import json
 import logging
 import math
 import time

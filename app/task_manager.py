@@ -5,7 +5,7 @@
 import threading
 import uuid
 from datetime import datetime
-from typing import Dict, Callable, Any
+from typing import Dict, Callable
 import logging
 
 logger = logging.getLogger(__name__)

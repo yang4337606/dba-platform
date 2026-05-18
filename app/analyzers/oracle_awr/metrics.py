@@ -234,8 +234,6 @@ def extract_awr_metrics(parsed_data):
     metrics["sql_with_type_conversion_count"] = 0  # Computed from SQL text analysis
 
     # Session cursor cache usage (for cursor leak detection)
-    session_cached_cursors = find_instance_activity(instance_activity, "session cursor cache hits", "per_second")
-    session_cache_count = find_instance_activity(instance_activity, "session cursor cache count", "total")
     metrics["session_cached_cursors_pct"] = 0  # Requires OPEN_CURSORS param which is not in AWR
 
     # Undo retention violations
@@ -936,7 +934,7 @@ def analyze_execution_plan(plan):
 
         # Filter
         if "FILTER" in op_name and cost > 500:
-            has_filter = True
+            pass  # Reserved for future filter-related diagnostics
 
         # Partition operations
         if "PARTITION" in op_name and "ALL" in op_name:

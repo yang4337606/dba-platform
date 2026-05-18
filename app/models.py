@@ -3,7 +3,6 @@ import json
 import logging
 import threading
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

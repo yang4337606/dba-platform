@@ -60,7 +60,7 @@ def analyze():
             if not any(tag in content_str for tag in ("<html", "<table", "<!doctype", "<head")):
                 flash("文件内容不像有效的 HTML 文件")
                 return redirect(url_for("main.index"))
-        except Exception:
+        except (UnicodeDecodeError, AttributeError):
             pass
 
     try:

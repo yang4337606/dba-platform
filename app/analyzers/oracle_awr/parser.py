@@ -430,14 +430,6 @@ def _foreground_wait_class(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 def _enrich_events_wait_class(events: list[dict[str, Any]], wait_classes: list[dict[str, Any]], foreground_wc: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Enrich events with wait_class from wait class tables when missing."""
-    # Build event-to-wait-class lookup from known Oracle event classifications
-    event_to_class = {}
-    for wc in wait_classes + foreground_wc:
-        cls = wc.get("wait_class", "")
-        if cls:
-            # Map well-known event names to wait classes
-            pass
-
     # Use a built-in mapping for common Oracle wait events
     builtin_map = {
         "log file sync": "Commit",

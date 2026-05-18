@@ -73,7 +73,6 @@ def export_all_knowledge() -> dict:
         knowledge["layers"]["rules"] = {"description": "规则引擎规则", "count": 0, "data": []}
 
     # Layer 3: Event Semantics
-    event_sem_path = os.path.join(base, "app", "analyzers", "oracle_awr", "event_semantics.py")
     try:
         from app.analyzers.oracle_awr.event_semantics import EVENT_SEMANTICS, SEMANTIC_DISPLAY_NAMES
         event_groups = []
