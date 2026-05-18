@@ -578,7 +578,10 @@ def compute_weighted_semantics(semantic_groups):
                 amplified_scores[target] += score * 0.2
 
     # Sort by score descending
-    return dict(sorted(amplified_scores.items(), key=lambda x: x[1], reverse=True)) = {
+    return dict(sorted(amplified_scores.items(), key=lambda x: x[1], reverse=True))
+
+
+SEMANTIC_DISPLAY_NAMES = {
     "redo_pipeline": "Redo/LGWR 写入链路",
     "temp_pressure": "TEMP/PGA 压力",
     "oltp_random_read": "OLTP 随机读",
